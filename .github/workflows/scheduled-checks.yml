@@ -1,0 +1,208 @@
+name: Scheduled checks
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      coverage:
+        description: Run the libjade coverage report
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  firmware-all-diy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: display_m5blackgray
+            target: esp32
+          - board: display_m5core2
+            target: esp32
+          - board: display_m5cores3
+            target: esp32s3
+          - board: display_m5fire
+            target: esp32
+          - board: display_m5stickcplus
+            target: esp32
+          - board: display_m5stickcplus2
+            target: esp32
+          - board: display_m5sticks3
+            target: esp32s3
+          - board: display_ttgo_tdisplay
+            target: esp32
+          - board: display_ttgo_tdisplays3
+            target: esp32s3
+          - board: display_ttgo_tdisplays3procamera
+            target: esp32s3
+          - board: display_ttgo_twatchs3
+            target: esp32s3
+          - board: display_waveshares3_touch_lcd2
+            target: esp32s3
+          - board: display_waveshares3_touch_lcd35
+            target: esp32s3
+          - board: diycam_esp32-cam
+            target: esp32
+          - board: diycam_esp32-s3-devkitc-1
+            target: esp32s3
+          - board: diycam_esp32-wrover-cam
+            target: esp32
+          - board: diycam_tcameraplus
+            target: esp32
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Build firmware
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          cp "configs/sdkconfig_${{ matrix.board }}.defaults" sdkconfig.defaults
+          idf.py set-target "${{ matrix.target }}"
+          idf.py all | tee "$RUNNER_TEMP/build.log"
+
+      - name: Report firmware size
+        run: |
+          {
+            echo "### ${{ matrix.board }}"
+            grep "binary size" "$RUNNER_TEMP/build.log"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  libjade-selfcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+    env:
+      ASAN_OPTIONS: symbolize=1,detect_leaks=0
+      UBSAN_OPTIONS: print_stacktrace=1
+      ASAN_SO: /usr/lib/gcc/x86_64-linux-gnu/13/libasan.so
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Fetch managed components
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./tools/switch_to.sh jade --dev --noradio
+
+      - name: Install test dependencies
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          pip install -r pinserver/requirements.txt
+          pip install .
+
+      - name: Run selfchecks
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          for selfcheck_source in libjade/selfcheck/*.c; do
+            selfcheck_name="$(basename "${selfcheck_source%.*}")"
+            echo "::group::selfcheck $selfcheck_name"
+            ./libjade/make_libjade.sh Sanitize -DSELFCHECK="$selfcheck_name"
+            LD_PRELOAD="$ASAN_SO" python ./jade_cli.py --device libjade selfcheck
+            echo "::endgroup::"
+          done
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Fetch managed components
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./tools/switch_to.sh jade --dev --noradio
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: c-cpp
+          build-mode: manual
+
+      - name: Build libjade
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./libjade/make_libjade.sh Debug
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:c-cpp
+
+  libjade-coverage:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.coverage }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install lcov
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends lcov
+
+      - name: Fetch managed components
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./tools/switch_to.sh jade --dev --noradio
+
+      - name: Install test dependencies
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          pip install -r pinserver/requirements.txt
+          pip install .
+          pip install pytest
+
+      - name: Build libjade with coverage
+        id: build
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./libjade/make_libjade.sh Debug --coverage
+          ./libjade/coverage.sh clean
+
+      - name: Run tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          python ./test_jade.py --log CRITICAL --libjade
+          pytest -v --libjade --no-legacy-flow --junitxml=pytest-coverage.xml tests
+
+      - name: Generate coverage report
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: ./libjade/coverage.sh
+
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: libjade-coverage
+          path: |
+            build_linux/lcov
+            pytest-coverage.xml
+          if-no-files-found: ignore
