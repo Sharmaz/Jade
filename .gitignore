@@ -17,3 +17,7 @@ dist/
 jade_client.egg-info/
 docs/_build/
 **/nvs_flash.bin
+
+# AI Files
+CLAUDE.md
+*PLAN.md
