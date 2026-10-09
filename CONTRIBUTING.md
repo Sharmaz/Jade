@@ -95,7 +95,7 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
 
 ## Continuous integration
 
-- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master` and on every push to `master`: format, firmware builds for three boards, libjade tests, and libjade tests with sanitizers. The firmware images of each board can be downloaded from the artifacts of the run.
+- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master` and on every push to `master`: format, firmware builds for three boards, libjade tests, and libjade tests with sanitizers. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
 - **`Scheduled checks`** (`.github/workflows/scheduled-checks.yml`) runs every Monday at 06:00 UTC and on demand: firmware builds for every DIY board, libjade selfchecks, CodeQL analysis and, on demand, a coverage report.
 - The image digest (`jade_builder@sha256:…`) appears in both workflows and in every command block of this guide. When it changes, update all of them together.
 
