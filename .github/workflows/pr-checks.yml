@@ -29,11 +29,20 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Trust the repository directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Reject unsupported format specifiers
         run: |
-          if git grep -I '%zu' main/ libjade/; then
+          grep_status=0
+          git grep -I '%zu' main/ libjade/ || grep_status=$?
+          if [ "$grep_status" -eq 0 ]; then
             echo 'Unsupported format specifier "%zu"'
             exit 1
+          fi
+          if [ "$grep_status" -ne 1 ]; then
+            echo "git grep failed with exit code $grep_status"
+            exit "$grep_status"
           fi
 
       - name: Format sources and reconfigure
@@ -64,6 +73,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+
+      - name: Trust the repository directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Build firmware
         run: |
@@ -99,6 +111,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+
+      - name: Trust the repository directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Fetch managed components
         run: |
@@ -154,6 +169,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Trust the repository directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Fetch managed components
         run: |
           pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
@@ -197,6 +215,22 @@ jobs:
           LD_PRELOAD="$ASAN_SO" setsid "$PWD/build_linux/libjade/libjade_daemon" --serialport "$socket_link" > daemon.log 2>&1 &
           daemon_pid=$!
           trap 'kill -- -"$daemon_pid" || true' EXIT
+          for wait_attempt in $(seq 1 100); do
+            if [ -e "$socket_link" ]; then
+              break
+            fi
+            if ! kill -0 "$daemon_pid" 2>/dev/null; then
+              echo "libjade_daemon exited before creating $socket_link"
+              cat daemon.log
+              exit 1
+            fi
+            sleep 0.1
+          done
+          if [ ! -e "$socket_link" ]; then
+            echo "libjade_daemon did not create $socket_link within 10 seconds"
+            cat daemon.log
+            exit 1
+          fi
           LD_PRELOAD="$ASAN_SO" python ./test_jade.py --log CRITICAL --serialport "$socket_link" --serialtimeout 30
           LD_PRELOAD="$ASAN_SO" pytest -v --device "$socket_link" --junitxml=pytest-sanitize-serial.xml tests
 
