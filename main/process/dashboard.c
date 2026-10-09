@@ -154,6 +154,7 @@ void get_bip85_bip39_entropy_process(void* process_ptr);
 void get_bip85_rsa_entropy_process(void* process_ptr);
 void debug_capture_image_data_process(void* process_ptr);
 void debug_scan_qr_process(void* process_ptr);
+void debug_unified_sighash_process(void* process_ptr);
 void debug_set_mnemonic_process(void* process_ptr);
 void debug_clean_reset_process(void* process_ptr);
 void debug_handshake(void* process_ptr);
@@ -547,6 +548,8 @@ static void dispatch_message(jade_process_t* process)
 #endif
     } else if (IS_METHOD("debug_scan_qr")) {
         task_function = debug_scan_qr_process;
+    } else if (IS_METHOD("debug_unified_sighash")) {
+        task_function = debug_unified_sighash_process;
     } else if (IS_METHOD("get_bip85_bip39_entropy")) {
         // ATM only exposed for testing purposes
         task_function = get_bip85_bip39_entropy_process;
