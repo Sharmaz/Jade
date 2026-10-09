@@ -29,7 +29,9 @@ Each command block below is self-contained: copy it as a whole and paste it into
 | Format | Always | 1 minute |
 | libjade tests | Always | 5 minutes |
 | libjade tests with sanitizers | When changing C code | Longer than the plain libjade tests |
+| XBT libjade tests | When changing XBT code (`CONFIG_XBT`) or the unified sighash | 5 minutes |
 | Firmware builds | When changing firmware code or board configurations | 3 minutes per board |
+| XBT firmware builds | When changing XBT code or board configurations | 3 minutes per board |
 
 Commit your changes before running the checks: `format.sh` rewrites files in place, so any file it changes shows up in `git status`.
 
@@ -77,6 +79,23 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
   LD_PRELOAD=$ASAN_SO pytest -v --libjade tests'
 ```
 
+### XBT libjade tests
+
+The XBT firmware is built with `CONFIG_XBT`: it only accepts the `xbt`, `xbt-testnet4` and `xbt-regtest` networks, and it never produces a signature that is valid on Bitcoin. The tests in `tests/xbt` skip themselves unless the firmware reports `"JADE_CHAIN": "XBT"` in `get_version_info`.
+
+```bash
+JADE_BUILDER=blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE_BUILDER" bash -c '
+  pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null &&
+  ./tools/switch_to.sh jade --dev --noradio &&
+  pip install -q -r pinserver/requirements.txt && pip install -q . && pip install -q pytest &&
+  ./libjade/make_libjade.sh Debug --xbt &&
+  export LD_LIBRARY_PATH=$PWD/build_linux/libjade &&
+  pytest -v --libjade tests/xbt tests/rpc/test_unified_sighash.py tests/rpc/test_unified_sighash_differential.py'
+```
+
+Before running the plain libjade tests again, rebuild libjade without `--xbt`: the rest of the suite uses the Bitcoin and Liquid networks.
+
 ### Firmware builds
 
 Run them last: the libjade checks run `tools/switch_to.sh`, which deletes `build/`. After this check, `build/` holds the images of the last board built.
@@ -93,9 +112,25 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
   done'
 ```
 
+### XBT firmware builds
+
+An XBT firmware is the board configuration plus the `configs/sdkconfig_xbt.defaults` layer. The last check fails if the final `sdkconfig` is missing `CONFIG_XBT=y`.
+
+```bash
+JADE_BUILDER=blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE_BUILDER" bash -c '
+  pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null &&
+  for board_target in display_ttgo_tdisplay:esp32 display_m5stickcplus2:esp32; do
+    board=${board_target%%:*}; target=${board_target##*:}
+    rm -rf sdkconfig build &&
+    cat configs/sdkconfig_$board.defaults configs/sdkconfig_xbt.defaults > sdkconfig.defaults &&
+    idf.py set-target $target && idf.py all && grep -qx "CONFIG_XBT=y" sdkconfig || exit 1
+  done'
+```
+
 ## Continuous integration
 
-- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master` and on every push to `master`: format, firmware builds for three boards, libjade tests, and libjade tests with sanitizers. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
+- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master` and on every push to `master`: format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, and the XBT libjade tests with sanitizers. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, and it fails if any XBT test was skipped. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
 - **`Scheduled checks`** (`.github/workflows/scheduled-checks.yml`) runs every Monday at 06:00 UTC and on demand: firmware builds for every DIY board, libjade selfchecks, CodeQL analysis and, on demand, a coverage report.
 - The image digest (`jade_builder@sha256:…`) appears in both workflows and in every command block of this guide. When it changes, update all of them together.
 
