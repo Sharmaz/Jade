@@ -2,7 +2,7 @@
 #
 # Build the Jade firmware into a shared library for in-process debugging
 #
-# ./libjade/make_libjade.sh [Debug|Release|RelWithDebInfo|MinSizeRel|Sanitize] [--log] [--camera] [--no-ci] [--coverage] [--display v1|v2]
+# ./libjade/make_libjade.sh [Debug|Release|RelWithDebInfo|MinSizeRel|Sanitize] [--log] [--camera] [--no-ci] [--coverage] [--display v1|v2] [--xbt]
 #
 set -e
 
@@ -11,9 +11,10 @@ LOG="0"
 CI="CI"
 CAMERA="0"
 JADE_DISPLAY="v2"
+XBT="0"
 
 usage() {
-    echo "Usage: $0 [Debug|Release|RelWithDebInfo|MinSizeRel|Sanitize] [--log] [--camera] [--no-ci] [--coverage] [--display v1|v2]"
+    echo "Usage: $0 [Debug|Release|RelWithDebInfo|MinSizeRel|Sanitize] [--log] [--camera] [--no-ci] [--coverage] [--display v1|v2] [--xbt]"
     exit 1
 }
 
@@ -38,6 +39,9 @@ while [ $# -gt 0 ]; do
         --camera)
             CAMERA="CAMERA"
             ;;
+        --xbt)
+            XBT="XBT"
+            ;;
         --display)
             shift
             case "$1" in
@@ -58,7 +62,7 @@ EXTRA_ARGS=''
 if [ "${BUILD_TYPE}" == "Sanitize" ]; then
     EXTRA_ARGS='-DCMAKE_C_FLAGS"-fsanitize=undefined" -DCMAKE_CXX_FLAGS"-fsanitize=undefined"'
 fi
-cmake -DCMAKE_BUILD_TYPE=${BUILD_TYPE} ${EXTRA_ARGS} -DLOG=${LOG} -DCOVERAGE=${COVERAGE} -DCAMERA=${CAMERA} -DCI=${CI} -DJADE_DISPLAY=${JADE_DISPLAY} $* ..
+cmake -DCMAKE_BUILD_TYPE=${BUILD_TYPE} ${EXTRA_ARGS} -DLOG=${LOG} -DCOVERAGE=${COVERAGE} -DCAMERA=${CAMERA} -DCI=${CI} -DJADE_DISPLAY=${JADE_DISPLAY} -DXBT=${XBT} $* ..
 make -j8
 cd ..
 
