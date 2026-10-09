@@ -1,27 +1,25 @@
+import hashlib
 from collections import namedtuple
 
 from . import *
+from .unified_sighash_reference import (
+    NO_CODESEPARATOR, SCRIPT_TYPE_BASE, SCRIPT_TYPE_TAPROOT, SCRIPT_TYPE_TAPSCRIPT, SIGHASH_ALL,
+    SIGHASH_SINGLE, SIGHASH_UNIFIED, TxOutput, compute_tapleaf_hash,
+    parse_transaction_without_witness, unified_sighash)
 
 VECTORS_FILE = 'tests/rpc/data/unified_sighash/unified_sighash.json'
+VECTORS_FILE_GIT_BLOB_HASH = '7f6c9685bf913cba28a334ff5b2bd1b447d44d56'
 VECTORS_HEADER = ['scriptCode', 'rawTx', 'inIdx', 'hashType', 'scriptType', 'spentOutputs',
                   'sighash']
 
-SCRIPT_TYPE_BASE = 0
-SCRIPT_TYPE_TAPROOT = 2
-SCRIPT_TYPE_TAPSCRIPT = 3
 INVALID_SCRIPT_TYPE = 4
 
-SIGHASH_ALL = 0x01
-SIGHASH_SINGLE = 0x03
-SIGHASH_UNIFIED = 0x20
 SIGHASH_UNDEFINED_BIT = 0x40
 SIGHASH_ALL_UNIFIED = SIGHASH_ALL | SIGHASH_UNIFIED
 SIGHASH_SINGLE_UNIFIED = SIGHASH_SINGLE | SIGHASH_UNIFIED
 SIGHASH_ALL_UNIFIED_WITH_UNDEFINED_BIT = SIGHASH_ALL_UNIFIED | SIGHASH_UNDEFINED_BIT
 SIGHASH_WIDER_THAN_A_BYTE = 0x100 | SIGHASH_ALL_UNIFIED
 
-TAPSCRIPT_LEAF_VERSION = 0xc0
-NO_CODESEPARATOR = 0xffffffff
 BAD_PARAMS_REQUEST_ID = 'bad_params'
 
 UnifiedSighashVector = namedtuple('UnifiedSighashVector', [
@@ -37,19 +35,32 @@ def _read_vectors():
 
 
 VECTORS = _read_vectors()
+VECTOR_PARAMS = [pytest.param(vector, id=f'vector_{vector.number:03}') for vector in VECTORS]
+
+
+def _git_blob_hash(data):
+    return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
+def test_unified_sighash_vectors_file_is_pinned():
+    with open(VECTORS_FILE, 'rb') as vectors_file:
+        assert _git_blob_hash(vectors_file.read()) == VECTORS_FILE_GIT_BLOB_HASH
 
 
 def _first_vector(predicate):
     return next(vector for vector in VECTORS if predicate(vector))
 
 
+def _transaction(vector):
+    return parse_transaction_without_witness(bytes.fromhex(vector.raw_tx))
+
+
 def _num_outputs(vector):
-    return wally.tx_get_num_outputs(wally.tx_from_hex(vector.raw_tx, 0))
+    return len(_transaction(vector).outputs)
 
 
-def _tapleaf_hash(tapscript):
-    tapleaf = bytes([TAPSCRIPT_LEAF_VERSION]) + bytes(wally.varbuff_to_bytes(tapscript))
-    return bytes(wally.bip340_tagged_hash(tapleaf, 'TapLeaf'))
+def _tapleaf_hash(vector):
+    return compute_tapleaf_hash(bytes.fromhex(vector.script_code))
 
 
 def _spent_outputs(vector):
@@ -71,7 +82,7 @@ def _params(vector, **overrides):
         'script_type': vector.script_type,
     }
     if vector.script_type == SCRIPT_TYPE_TAPSCRIPT:
-        params['tapleaf_hash'] = _tapleaf_hash(bytes.fromhex(vector.script_code))
+        params['tapleaf_hash'] = _tapleaf_hash(vector)
         params['codeseparator_position'] = NO_CODESEPARATOR
     params.update(overrides)
     return params
@@ -87,10 +98,21 @@ def _get_unified_sighash(jade, params):
     return jade._jadeRpc('debug_unified_sighash', params)
 
 
-@pytest.mark.parametrize('vector', [
-    pytest.param(vector, id=f'vector_{vector.number:03}') for vector in VECTORS])
+@pytest.mark.parametrize('vector', VECTOR_PARAMS)
 def test_unified_sighash_vector(jade, vector):
     assert _get_unified_sighash(jade, _params(vector)) == bytes.fromhex(vector.expected_sighash)
+
+
+@pytest.mark.parametrize('vector', VECTOR_PARAMS)
+def test_unified_sighash_reference_vector(vector):
+    spent_outputs = [TxOutput(satoshi, bytes.fromhex(script))
+                     for satoshi, script in vector.spent_outputs]
+    is_tapscript = vector.script_type == SCRIPT_TYPE_TAPSCRIPT
+    tapleaf_hash = _tapleaf_hash(vector) if is_tapscript else None
+    digest = unified_sighash(_transaction(vector), vector.input_index, spent_outputs,
+                             bytes.fromhex(vector.script_code), vector.sighash, vector.script_type,
+                             tapleaf_hash, NO_CODESEPARATOR)
+    assert digest == bytes.fromhex(vector.expected_sighash)
 
 
 BASE_VECTOR = _first_vector(lambda vector: vector.script_type == SCRIPT_TYPE_BASE)
