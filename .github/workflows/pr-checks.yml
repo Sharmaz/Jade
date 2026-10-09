@@ -1,0 +1,211 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Reject unsupported format specifiers
+        run: |
+          if git grep -I '%zu' main/ libjade/; then
+            echo 'Unsupported format specifier "%zu"'
+            exit 1
+          fi
+
+      - name: Format sources and reconfigure
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./format.sh
+          idf.py reconfigure
+
+      - name: Check for formatting changes
+        run: git diff --exit-code
+
+  firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: display_ttgo_tdisplay
+            target: esp32
+          - board: display_m5stickcplus2
+            target: esp32
+          - board: display_ttgo_tdisplays3
+            target: esp32s3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Build firmware
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          cp "configs/sdkconfig_${{ matrix.board }}.defaults" sdkconfig.defaults
+          idf.py set-target "${{ matrix.target }}"
+          idf.py all | tee "$RUNNER_TEMP/build.log"
+
+      - name: Report firmware size
+        run: |
+          {
+            echo "### ${{ matrix.board }}"
+            grep "binary size" "$RUNNER_TEMP/build.log"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload firmware images
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.board }}
+          path: |
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/ota_data_initial.bin
+            build/jade.bin
+          if-no-files-found: error
+
+  libjade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Fetch managed components
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./tools/switch_to.sh jade --dev --noradio
+
+      - name: Install test dependencies
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          pip install -r pinserver/requirements.txt
+          pip install .
+          pip install pytest
+
+      - name: Build libjade
+        id: build
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./libjade/make_libjade.sh Debug
+
+      - name: Run test_jade.py
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          python ./test_jade.py --log CRITICAL --libjade
+
+      - name: Run pytest suite
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          pytest -v --libjade --junitxml=pytest-libjade.xml tests
+
+      - name: Upload test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-libjade
+          path: pytest-libjade.xml
+          if-no-files-found: ignore
+
+  libjade-sanitize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+    env:
+      ASAN_OPTIONS: symbolize=1,detect_leaks=0
+      UBSAN_OPTIONS: print_stacktrace=1
+      ASAN_SO: /usr/lib/gcc/x86_64-linux-gnu/13/libasan.so
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Fetch managed components
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./tools/switch_to.sh jade --dev --noradio
+
+      - name: Install test dependencies
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          pip install -r pinserver/requirements.txt
+          pip install .
+          pip install pytest
+
+      - name: Build libjade with sanitizers
+        id: build
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./libjade/make_libjade.sh Sanitize
+
+      - name: Run standard tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          LD_PRELOAD="$ASAN_SO" python ./test_jade.py --log CRITICAL --libjade
+          LD_PRELOAD="$ASAN_SO" pytest -v --libjade --junitxml=pytest-sanitize-libjade.xml tests
+
+      - name: Run non-legacy flow tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          LD_PRELOAD="$ASAN_SO" pytest -v --libjade --no-legacy-flow --junitxml=pytest-sanitize-non-legacy.xml \
+            tests/rpc/test_sign_tx.py tests/rpc/test_multisig.py
+
+      - name: Run serial tests through the daemon
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          socket_link="$PWD/tmp_socket"
+          LD_PRELOAD="$ASAN_SO" setsid "$PWD/build_linux/libjade/libjade_daemon" --serialport "$socket_link" > daemon.log 2>&1 &
+          daemon_pid=$!
+          trap 'kill -- -"$daemon_pid" || true' EXIT
+          LD_PRELOAD="$ASAN_SO" python ./test_jade.py --log CRITICAL --serialport "$socket_link" --serialtimeout 30
+          LD_PRELOAD="$ASAN_SO" pytest -v --device "$socket_link" --junitxml=pytest-sanitize-serial.xml tests
+
+      - name: Upload test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-libjade-sanitize
+          path: |
+            pytest-sanitize-*.xml
+            daemon.log
+          if-no-files-found: ignore
