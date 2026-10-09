@@ -26,6 +26,13 @@ menu "Blockstream Jade"
         help
             Enable amagamated build, compiling all files as a single translation unit.  Should create a smaller/faster binary.
 
+    config XBT
+        bool "Build the XBT (Bitcoin BLAKE2b) only firmware"
+        default n
+        help
+            Accept only the xbt, xbt-testnet4 and xbt-regtest networks,
+            and never produce a signature that is valid on Bitcoin.
+
     config BOARD_TYPE_JADE_ANY
         # Board is a Jade v1 or v2 device of any flavor
         # No prompt: this is internal config meant to be selected automatically

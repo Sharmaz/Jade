@@ -717,12 +717,27 @@ network_t network_from_psbt_type(struct wally_psbt* psbt)
 // Sign a psbt/pset - the passed wally psbt struct is updated with any signatures.
 // Returns 0 if no errors occurred - does not necessarily indicate that signatures were added.
 // Returns an rpc/message error code on error, and the error string should be populated.
+static bool get_input_signature_hash(struct wally_psbt* psbt, const size_t index, const struct wally_tx* tx,
+    const uint8_t* scriptcode, const size_t scriptcode_len, uint8_t* txhash, const size_t txhash_len)
+{
+#ifdef CONFIG_XBT
+    return false;
+#else
+    return wally_psbt_get_input_signature_hash(psbt, index, tx, scriptcode, scriptcode_len, 0, txhash, txhash_len)
+        == WALLY_OK;
+#endif
+}
+
 int sign_psbt(jade_process_t* process, CborValue* params, const network_t network_id, struct wally_psbt* psbt,
     const char** errmsg)
 {
     JADE_ASSERT(psbt);
     JADE_INIT_OUT_PPTR(errmsg);
     JADE_ASSERT(network_id != NETWORK_NONE);
+#ifdef CONFIG_XBT
+    *errmsg = "XBT signing is not available yet";
+    return CBOR_RPC_BAD_PARAMETERS;
+#endif
     int retval = 0;
 
     size_t is_elements = 0;
@@ -1080,9 +1095,7 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
                    psbt, index, script, script_len, scriptcode, sizeof(scriptcode), &scriptcode_len)
                 != WALLY_OK
             || scriptcode_len > sizeof(scriptcode)
-            || wally_psbt_get_input_signature_hash(
-                   psbt, index, tx, scriptcode, scriptcode_len, 0, txhash, sizeof(txhash))
-                != WALLY_OK) {
+            || !get_input_signature_hash(psbt, index, tx, scriptcode, scriptcode_len, txhash, sizeof(txhash))) {
             JADE_LOGE("Failed to generate tx input hash");
             *errmsg = "Failed to generate tx input hash";
             retval = CBOR_RPC_INTERNAL_ERROR;
