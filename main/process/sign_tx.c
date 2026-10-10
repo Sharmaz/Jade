@@ -23,6 +23,8 @@
 
 #include "sign_utils.h"
 
+#ifndef CONFIG_XBT
+
 static struct wally_tx* params_txn(jade_process_t* process, const CborValue* params, const network_t network_id,
     const bool for_liquid, uint64_t* explicit_fee)
 {
@@ -940,4 +942,5 @@ void sign_liquid_tx_process(void* process_ptr)
     sign_tx_impl((jade_process_t*)process_ptr, for_liquid);
 }
 
+#endif
 #endif // AMALGAMATED_BUILD

@@ -77,6 +77,11 @@ if (CAMERA)
     add_compile_options(-DCONFIG_LIBJADE_CAMERA)
 endif()
 
+option(XBT "Build the XBT (Bitcoin BLAKE2b) only firmware" OFF)
+if (XBT)
+    add_compile_options(-DCONFIG_XBT)
+endif()
+
 set(JADE_DISPLAY "v2" CACHE STRING "Jade display to emulate (v1 or v2)")
 set_property(CACHE JADE_DISPLAY PROPERTY STRINGS v1 v2)
 if(JADE_DISPLAY STREQUAL "v1")

@@ -36,9 +36,14 @@ void build_version_info_reply(const void* ctx, CborEncoder* container)
 #else
     const uint8_t num_version_fields = 15;
 #endif
+#ifdef CONFIG_XBT
+    const uint8_t num_xbt_fields = 1;
+#else
+    const uint8_t num_xbt_fields = 0;
+#endif
 
     CborEncoder map_encoder;
-    CborError cberr = cbor_encoder_create_map(container, &map_encoder, num_version_fields);
+    CborError cberr = cbor_encoder_create_map(container, &map_encoder, num_version_fields + num_xbt_fields);
     JADE_ASSERT(cberr == CborNoError);
 
     add_string_to_map(&map_encoder, "JADE_VERSION", running_app_info.version);
@@ -115,6 +120,9 @@ void build_version_info_reply(const void* ctx, CborEncoder* container)
         : restriction == NETWORK_TYPE_TEST                  ? "TEST"
                                                             : "ALL";
     add_string_to_map(&map_encoder, "JADE_NETWORKS", networks);
+#ifdef CONFIG_XBT
+    add_string_to_map(&map_encoder, "JADE_CHAIN", "XBT");
+#endif
 
     // Deprecated (as of 0.1.25) - to be removed later
     add_boolean_to_map(&map_encoder, "JADE_HAS_PIN", has_pin);

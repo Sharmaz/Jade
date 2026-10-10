@@ -23,6 +23,7 @@ void __wrap_abort(void);
 #define ENABLE_MODULE_WHITELIST 1
 #define HAVE_BUILTIN_POPCOUNT 1
 #include "../components/libwally-core/upstream/src/amalgamation/combined.c"
+#include "./xbt_sighash_ban.h"
 
 #include "./aes.c"
 #include "./assets.c"

@@ -1254,6 +1254,7 @@ void signing_data_free(void* signing_data)
     free(p);
 }
 
+#ifndef CONFIG_XBT
 // Function to fetch a hash for signing a transaction input
 bool wallet_get_tx_input_hash(struct wally_tx* tx, const size_t index, signing_data_t* signing_data,
     const uint8_t* script, size_t script_len, const uint8_t* genesis, const size_t genesis_len)
@@ -1278,6 +1279,7 @@ bool wallet_get_tx_input_hash(struct wally_tx* tx, const size_t index, signing_d
     }
     return true;
 }
+#endif
 
 void wallet_get_fingerprint(uint8_t* output, const size_t output_len)
 {

@@ -81,6 +81,10 @@ if(CONFIG_AMALGAMATED_BUILD)
     add_compile_definitions(AMALGAMATED_BUILD=1)
 endif()
 
+if(CONFIG_XBT AND NOT CONFIG_AMALGAMATED_BUILD)
+    target_compile_options(${COMPONENT_LIB} PRIVATE -include ${COMPONENT_DIR}/xbt_sighash_ban.h)
+endif()
+
 target_link_libraries(${COMPONENT_TARGET} "-u custom_app_desc")
 list(APPEND link_options "-Wl,--wrap=abort")
 idf_build_set_property(LINK_OPTIONS "${link_options}" APPEND)

@@ -75,6 +75,12 @@ jobs:
             target: esp32
           - board: display_ttgo_tdisplays3
             target: esp32s3
+          - board: display_ttgo_tdisplay
+            target: esp32
+            xbt: true
+          - board: display_m5stickcplus2
+            target: esp32
+            xbt: true
     steps:
       - uses: actions/checkout@v7
         with:
@@ -86,21 +92,29 @@ jobs:
       - name: Build firmware
         run: |
           pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
-          cp "configs/sdkconfig_${{ matrix.board }}.defaults" sdkconfig.defaults
+          if [ "${{ matrix.xbt }}" = "true" ]; then
+            cat "configs/sdkconfig_${{ matrix.board }}.defaults" configs/sdkconfig_xbt.defaults > sdkconfig.defaults
+          else
+            cp "configs/sdkconfig_${{ matrix.board }}.defaults" sdkconfig.defaults
+          fi
           idf.py set-target "${{ matrix.target }}"
           idf.py all | tee "$RUNNER_TEMP/build.log"
+
+      - name: Check the XBT configuration
+        if: ${{ matrix.xbt }}
+        run: grep -qx 'CONFIG_XBT=y' sdkconfig
 
       - name: Report firmware size
         run: |
           {
-            echo "### ${{ matrix.board }}"
+            echo "### ${{ matrix.board }}${{ matrix.xbt && ' (XBT)' || '' }}"
             grep "binary size" "$RUNNER_TEMP/build.log"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload firmware images
         uses: actions/upload-artifact@v7
         with:
-          name: firmware-${{ matrix.board }}
+          name: firmware-${{ matrix.board }}${{ matrix.xbt && '-xbt' || '' }}
           path: |
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
@@ -163,6 +177,97 @@ jobs:
         with:
           name: pytest-libjade
           path: pytest-libjade.xml
+          if-no-files-found: ignore
+
+  libjade-xbt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    env:
+      ASAN_OPTIONS: symbolize=1,detect_leaks=0
+      UBSAN_OPTIONS: print_stacktrace=1
+      ASAN_SO: /usr/lib/gcc/x86_64-linux-gnu/13/libasan.so
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Trust the repository directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Check that the XBT sighash ban is active
+        run: |
+          ban_check_dir="$RUNNER_TEMP/xbt_sighash_ban"
+          mkdir -p "$ban_check_dir"
+          banned_functions="$(sed -n 's/^#pragma GCC poison //p' main/xbt_sighash_ban.h)"
+          if [ -z "$banned_functions" ]; then
+            echo "No banned functions found in main/xbt_sighash_ban.h"
+            exit 1
+          fi
+          for banned_function in $banned_functions; do
+            printf '#include "xbt_sighash_ban.h"\nvoid* banned_function_address(void) { return (void*)%s; }\n' \
+              "$banned_function" > "$ban_check_dir/check.c"
+            if gcc -DCONFIG_XBT -I main -I libjade/include -I components/libwally-core/upstream/include \
+                -fsyntax-only "$ban_check_dir/check.c" 2> "$ban_check_dir/check.log"; then
+              echo "$banned_function compiles in an XBT build"
+              exit 1
+            fi
+            if ! grep -q "poisoned" "$ban_check_dir/check.log"; then
+              cat "$ban_check_dir/check.log"
+              exit 1
+            fi
+            echo "$banned_function is banned"
+          done
+
+      - name: Fetch managed components
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./tools/switch_to.sh jade --dev --noradio
+
+      - name: Install test dependencies
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          pip install -r pinserver/requirements.txt
+          pip install .
+          pip install pytest
+
+      - name: Build XBT libjade with sanitizers
+        id: build
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./libjade/make_libjade.sh Sanitize --xbt
+
+      - name: Run XBT tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          LD_PRELOAD="$ASAN_SO" pytest -v --libjade --junitxml=pytest-libjade-xbt.xml \
+            tests/xbt tests/rpc/test_unified_sighash.py tests/rpc/test_unified_sighash_differential.py
+
+      - name: Check that no XBT test was skipped
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          python3 - <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ElementTree
+
+          suites = ElementTree.parse('pytest-libjade-xbt.xml').getroot().iter('testsuite')
+          skipped = sum(int(suite.get('skipped', 0)) for suite in suites)
+          if skipped:
+              sys.exit(f'{skipped} XBT tests were skipped: the firmware did not report JADE_CHAIN XBT')
+          EOF
+
+      - name: Upload test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-libjade-xbt
+          path: pytest-libjade-xbt.xml
           if-no-files-found: ignore
 
   libjade-sanitize:

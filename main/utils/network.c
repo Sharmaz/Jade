@@ -20,6 +20,12 @@
 #define TAG_LOCALTEST "localtest"
 #define TAG_LOCALTESTLIQUID "localtest-liquid"
 
+#ifdef CONFIG_XBT
+#define TAG_XBT "xbt"
+#define TAG_XBT_TESTNET4 "xbt-testnet4"
+#define TAG_XBT_REGTEST "xbt-regtest"
+#endif
+
 // Green CSV buckets allowed
 static const size_t ALLOWED_CSV_MAINNET[] = { 25920, 51840, 65535 };
 static const size_t ALLOWED_CSV_TESTNET[] = { 144, 4320, 51840 };
@@ -99,6 +105,41 @@ bool network_is_allowable_csv_blocks(const network_t network_id, const uint32_t 
     return csv_blocks >= allowed[0];
 }
 
+#ifdef CONFIG_XBT
+static network_t xbt_network_from_name(const char* name)
+{
+    if (!name) {
+        return NETWORK_NONE;
+    }
+    if (!strcmp(TAG_XBT, name)) {
+        return NETWORK_BITCOIN;
+    }
+    if (!strcmp(TAG_XBT_TESTNET4, name)) {
+        return NETWORK_BITCOIN_TESTNET;
+    }
+    if (!strcmp(TAG_XBT_REGTEST, name)) {
+        return NETWORK_BITCOIN_REGTEST;
+    }
+    return NETWORK_NONE;
+}
+
+static const char* xbt_network_to_name(const network_t network_id)
+{
+    switch (network_id) {
+    case NETWORK_BITCOIN:
+        return TAG_XBT;
+    case NETWORK_BITCOIN_TESTNET:
+        return TAG_XBT_TESTNET4;
+    case NETWORK_BITCOIN_REGTEST:
+        return TAG_XBT_REGTEST;
+    default:
+        break;
+    }
+    JADE_ASSERT(false);
+    return NULL;
+}
+#endif
+
 network_t network_from_name(const char* name)
 {
     // Ensure our enum values match the libwally constants
@@ -109,6 +150,10 @@ network_t network_from_name(const char* name)
     JADE_STATIC_ASSERT(NETWORK_LIQUID == WALLY_NETWORK_LIQUID);
     JADE_STATIC_ASSERT(NETWORK_LIQUID_REGTEST == WALLY_NETWORK_LIQUID_REGTEST);
     JADE_STATIC_ASSERT(NETWORK_LIQUID_TESTNET == WALLY_NETWORK_LIQUID_TESTNET);
+
+#ifdef CONFIG_XBT
+    return xbt_network_from_name(name);
+#endif
 
     if (name) {
         if (!strcmp(TAG_MAINNET, name)) {
@@ -130,6 +175,10 @@ network_t network_from_name(const char* name)
 
 const char* network_to_name(const network_t network_id)
 {
+#ifdef CONFIG_XBT
+    return xbt_network_to_name(network_id);
+#endif
+
     switch (network_id) {
     case NETWORK_BITCOIN:
         return TAG_MAINNET;
