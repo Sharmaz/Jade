@@ -16,8 +16,6 @@ SINGLESIG_P2WPKH_VARIANT = 'wpkh(k)'
 REJECTED_NETWORKS = ['mainnet', 'testnet', 'localtest', 'liquid', 'testnet-liquid',
                      'localtest-liquid']
 REMOVED_SIGNING_METHODS = ['sign_tx', 'sign_liquid_tx']
-PSBT_FIXTURE_FILE = 'tests/rpc/data/sign_psbt/psbt_ss_not_us.json'
-BASE64_PREFIX = 'b64:'
 
 XbtNetwork = namedtuple('XbtNetwork', ['name', 'bip32_version', 'coin_type', 'bech32_prefix'])
 
@@ -53,13 +51,6 @@ def _expected_receive_address(network):
     return wally.bip32_key_to_addr_segwit(address_key, network.bech32_prefix, 0)
 
 
-def _psbt_fixture():
-    with open(PSBT_FIXTURE_FILE, 'r') as fixture_file:
-        encoded_psbt = json.load(fixture_file)['input']['psbt']
-    assert encoded_psbt.startswith(BASE64_PREFIX)
-    return base64.b64decode(encoded_psbt[len(BASE64_PREFIX):])
-
-
 def test_xbt_version_info_reports_chain(jade):
     assert jade.get_version_info()['JADE_CHAIN'] == 'XBT'
 
@@ -88,9 +79,3 @@ def test_xbt_firmware_has_no_legacy_signing_flow(jade, method):
     request = jade.jade.build_request('removed_method', method, {})
     reply = jade.jade.make_rpc_call(request)
     assert reply['error']['code'] == JadeError.UNKNOWN_METHOD
-
-
-def test_xbt_firmware_blocks_psbt_signing_until_unified_signing(jade):
-    params = {'network': 'xbt-testnet4', 'psbt': _psbt_fixture()}
-    check_bad_params(jade.jade, ('blocked_signing', 'sign_psbt', params),
-                     'XBT signing is not available yet')
