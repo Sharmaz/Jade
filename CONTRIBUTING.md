@@ -30,6 +30,7 @@ Each command block below is self-contained: copy it as a whole and paste it into
 | libjade tests | Always | 5 minutes |
 | libjade tests with sanitizers | When changing C code | Longer than the plain libjade tests |
 | XBT libjade tests | When changing XBT code (`CONFIG_XBT`) or the unified sighash | 5 minutes |
+| XBT libjade tests with sanitizers | When changing XBT C code or the unified sighash | Longer than the XBT libjade tests |
 | Firmware builds | When changing firmware code or board configurations | 3 minutes per board |
 | XBT firmware builds | When changing XBT code or board configurations | 3 minutes per board |
 
@@ -89,12 +90,47 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
   pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null &&
   ./tools/switch_to.sh jade --dev --noradio &&
   pip install -q -r pinserver/requirements.txt && pip install -q . && pip install -q pytest &&
-  ./libjade/make_libjade.sh Debug --xbt &&
   export LD_LIBRARY_PATH=$PWD/build_linux/libjade &&
+  ./libjade/make_libjade.sh Debug --xbt -DSELFCHECK=unified_signature &&
+  python ./jade_cli.py --device libjade selfcheck &&
+  ./libjade/make_libjade.sh Debug --xbt -DSELFCHECK= &&
   pytest -v --libjade tests/xbt tests/rpc/test_unified_sighash.py tests/rpc/test_unified_sighash_differential.py'
 ```
 
-Before running the plain libjade tests again, rebuild libjade without `--xbt`: the rest of the suite uses the Bitcoin and Liquid networks.
+The first build runs the `unified_signature` selfcheck (`libjade/selfcheck/unified_signature.c`), which checks the signature verification that the XBT firmware runs after every signature. CMake keeps the last `SELFCHECK` value in `build_linux`, so the second build passes `-DSELFCHECK=` to restore the default selfcheck that `test_jade.py` runs.
+
+### XBT libjade tests with sanitizers
+
+The same steps as the `libjade-xbt` job of `PR checks`: the check that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, then the `unified_signature` selfcheck and the XBT tests, with libjade built with sanitizers.
+
+```bash
+JADE_BUILDER=blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE_BUILDER" bash -c '
+  ban_check_directory=$(mktemp -d) &&
+  banned_functions=$(sed -n "s/^#pragma GCC poison //p" main/xbt_sighash_ban.h) &&
+  test -n "$banned_functions" &&
+  for banned_function in $banned_functions; do
+    printf "#include \"xbt_sighash_ban.h\"\nvoid* banned_function_address(void) { return (void*)%s; }\n" "$banned_function" > "$ban_check_directory/check.c"
+    if gcc -DCONFIG_XBT -I main -I libjade/include -I components/libwally-core/upstream/include -fsyntax-only "$ban_check_directory/check.c" 2> "$ban_check_directory/check.log"; then
+      echo "$banned_function compiles in an XBT build"; exit 1
+    fi
+    grep -q poisoned "$ban_check_directory/check.log" || { cat "$ban_check_directory/check.log"; exit 1; }
+    echo "$banned_function is banned"
+  done &&
+  pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null &&
+  ./tools/switch_to.sh jade --dev --noradio &&
+  pip install -q -r pinserver/requirements.txt && pip install -q . && pip install -q pytest &&
+  export LD_LIBRARY_PATH=$PWD/build_linux/libjade ASAN_OPTIONS=symbolize=1,detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 &&
+  export ASAN_LIBRARY=$(gcc -print-file-name=libasan.so) &&
+  ./libjade/make_libjade.sh Sanitize --xbt -DSELFCHECK=unified_signature &&
+  LD_PRELOAD=$ASAN_LIBRARY python ./jade_cli.py --device libjade selfcheck &&
+  ./libjade/make_libjade.sh Sanitize --xbt -DSELFCHECK= &&
+  LD_PRELOAD=$ASAN_LIBRARY pytest -v --libjade tests/xbt tests/rpc/test_unified_sighash.py tests/rpc/test_unified_sighash_differential.py'
+```
+
+libjade is built with `-fno-sanitize-recover=all`, so the first memory error or undefined behavior stops the run. A failure here points to a real bug in the code, not to a flaky run.
+
+Before running the plain libjade tests again after either XBT check, rebuild libjade without `--xbt`: the rest of the suite uses the Bitcoin and Liquid networks.
 
 ### Firmware builds
 
@@ -130,7 +166,7 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
 
 ## Continuous integration
 
-- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master`, and on demand with "Run workflow": format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, and the XBT libjade tests with sanitizers. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, and it fails if any XBT test was skipped. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
+- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master`, and on demand with "Run workflow": format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, and the XBT libjade tests with sanitizers. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, fails if any XBT test was skipped, and runs the `unified_signature` selfcheck. The "XBT libjade tests with sanitizers" check runs the same steps locally. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
 - `PR checks` does not run again after a merge. The `master` ruleset requires a branch to be up to date with `master` before it can be merged, so the run of the pull request already tested exactly what lands on `master`. When `master` moves while a pull request is open, update the branch ("Update branch") and wait for the checks again. To get the firmware images of `master`, run `PR checks` on `master` with "Run workflow".
 - **`Scheduled checks`** (`.github/workflows/scheduled-checks.yml`) runs every Monday at 06:00 UTC and on demand: firmware builds for every DIY board, libjade selfchecks, CodeQL analysis and, on demand, a coverage report.
 - The image digest (`jade_builder@sha256:…`) appears in both workflows and in every command block of this guide. When it changes, update all of them together.

@@ -6,6 +6,7 @@
 #include "../utils/cbor_rpc.h"
 #include "../utils/malloc_ext.h"
 #include "../utils/temporary_stack.h"
+#include "../utils/unified_sighash.h"
 #include "../utils/util.h"
 
 #include <sodium/utils.h>
@@ -673,6 +674,9 @@ bool validate_elements_outputs(const network_t network_id, const struct wally_tx
 bool sighash_is_supported(const TxType_t txtype, const uint32_t sig_type, const uint32_t sighash, const bool for_liquid,
     const bool is_partial)
 {
+#ifdef CONFIG_XBT
+    return sighash == WALLY_SIGHASH_ALL || sighash == UNIFIED_SIGHASH_ALL;
+#else
     if (for_liquid && txtype == TXTYPE_SWAP && is_partial) {
         // Liquid partial swap: must be SINGLE | ACP
         return sighash == (WALLY_SIGHASH_SINGLE | WALLY_SIGHASH_ANYONECANPAY);
@@ -683,6 +687,7 @@ bool sighash_is_supported(const TxType_t txtype, const uint32_t sig_type, const 
     }
     // All other cases must be ALL at present
     return sighash == WALLY_SIGHASH_ALL;
+#endif
 }
 
 void params_genesis_hash(network_t network_id, const bool for_liquid, const uint8_t* genesis, const size_t genesis_len,

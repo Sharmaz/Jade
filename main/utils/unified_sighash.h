@@ -6,10 +6,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
-struct wally_tx;
+#include <wally_transaction.h>
 
 #define UNIFIED_SIGHASH_FLAG 0x20
+#define UNIFIED_SIGHASH_ALL (WALLY_SIGHASH_ALL | UNIFIED_SIGHASH_FLAG)
 
 typedef enum {
     UNIFIED_SIGHASH_SCRIPT_TYPE_BASE = 0,

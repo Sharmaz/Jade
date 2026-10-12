@@ -14,6 +14,8 @@
 #include "../utils/malloc_ext.h"
 #include "../utils/psbt.h"
 #include "../utils/temporary_stack.h"
+#include "../utils/unified_sighash.h"
+#include "../utils/unified_signature.h"
 #include "../utils/util.h"
 #include "../utils/wally_ext.h"
 #include "../wallet.h"
@@ -714,30 +716,142 @@ network_t network_from_psbt_type(struct wally_psbt* psbt)
     return is_elements ? NETWORK_LIQUID : NETWORK_BITCOIN;
 }
 
-// Sign a psbt/pset - the passed wally psbt struct is updated with any signatures.
-// Returns 0 if no errors occurred - does not necessarily indicate that signatures were added.
-// Returns an rpc/message error code on error, and the error string should be populated.
-static bool get_input_signature_hash(struct wally_psbt* psbt, const size_t index, const struct wally_tx* tx,
-    const uint8_t* scriptcode, const size_t scriptcode_len, uint8_t* txhash, const size_t txhash_len)
+#ifdef CONFIG_XBT
+static const uint8_t EVEN_Y_PUBLIC_KEY_PREFIX = 0x02;
+static const size_t P2TR_SCRIPTPUBKEY_OUTPUT_KEY_OFFSET = 2;
+
+static unified_sighash_script_type_t unified_sighash_script_type_from_signature_type(const uint32_t signature_type)
+{
+    switch (signature_type) {
+    case WALLY_SIGTYPE_PRE_SW:
+        return UNIFIED_SIGHASH_SCRIPT_TYPE_BASE;
+    case WALLY_SIGTYPE_SW_V0:
+        return UNIFIED_SIGHASH_SCRIPT_TYPE_WITNESS_V0;
+    case WALLY_SIGTYPE_SW_V1:
+        return UNIFIED_SIGHASH_SCRIPT_TYPE_TAPROOT;
+    default:
+        JADE_ASSERT(false);
+    }
+}
+
+static bool get_unified_input_signature_hash(const struct wally_psbt* psbt, const size_t input_index,
+    const struct wally_tx* transaction, const uint32_t signature_type, const uint8_t* scriptcode,
+    const size_t scriptcode_length, uint8_t* digest, const size_t digest_length)
+{
+    unified_sighash_spent_output_t* const spent_outputs
+        = JADE_CALLOC(psbt->num_inputs, sizeof(unified_sighash_spent_output_t));
+    bool has_every_spent_output = true;
+    for (size_t spent_output_index = 0; spent_output_index < psbt->num_inputs; ++spent_output_index) {
+        const struct wally_tx_output* utxo = NULL;
+        if (wally_psbt_get_input_best_utxo(psbt, spent_output_index, &utxo) != WALLY_OK || !utxo) {
+            has_every_spent_output = false;
+            break;
+        }
+        spent_outputs[spent_output_index].satoshi = utxo->satoshi;
+        spent_outputs[spent_output_index].script = utxo->script;
+        spent_outputs[spent_output_index].script_len = utxo->script_len;
+    }
+
+    const bool has_digest = has_every_spent_output
+        && unified_sighash_get_digest(transaction, input_index, spent_outputs, psbt->num_inputs, scriptcode,
+            scriptcode_length, UNIFIED_SIGHASH_ALL, unified_sighash_script_type_from_signature_type(signature_type),
+            NULL, 0, WALLY_NO_CODESEPARATOR, digest, digest_length);
+    free(spent_outputs);
+    return has_digest;
+}
+
+static bool taproot_signature_is_absent_or_unified(const struct wally_psbt* psbt, const size_t input_index)
+{
+    uint8_t signature[EC_SIGNATURE_LEN + 1];
+    size_t signature_length = 0;
+    if (wally_psbt_get_input_taproot_signature(psbt, input_index, signature, sizeof(signature), &signature_length)
+        != WALLY_OK) {
+        return false;
+    }
+    return !signature_length
+        || (signature_length == sizeof(signature) && signature[EC_SIGNATURE_LEN] == UNIFIED_SIGHASH_ALL);
+}
+
+static bool get_taproot_output_key(
+    const struct wally_psbt* psbt, const size_t input_index, uint8_t* output_key, const size_t output_key_length)
+{
+    JADE_ASSERT(output_key);
+    JADE_ASSERT(output_key_length == EC_PUBLIC_KEY_LEN);
+
+    const struct wally_tx_output* utxo = NULL;
+    size_t scriptpubkey_type = 0;
+    if (wally_psbt_get_input_best_utxo(psbt, input_index, &utxo) != WALLY_OK || !utxo
+        || wally_scriptpubkey_get_type(utxo->script, utxo->script_len, &scriptpubkey_type) != WALLY_OK
+        || scriptpubkey_type != WALLY_SCRIPT_TYPE_P2TR) {
+        return false;
+    }
+    output_key[0] = EVEN_Y_PUBLIC_KEY_PREFIX;
+    memcpy(output_key + 1, utxo->script + P2TR_SCRIPTPUBKEY_OUTPUT_KEY_OFFSET, EC_XONLY_PUBLIC_KEY_LEN);
+    return true;
+}
+
+static bool verify_unified_taproot_signature(
+    const struct wally_psbt* psbt, const size_t input_index, const uint8_t* digest, const size_t digest_length)
+{
+    uint8_t output_key[EC_PUBLIC_KEY_LEN];
+    uint8_t signature[EC_SIGNATURE_LEN + 1];
+    size_t signature_length = 0;
+    return get_taproot_output_key(psbt, input_index, output_key, sizeof(output_key))
+        && wally_psbt_get_input_taproot_signature(psbt, input_index, signature, sizeof(signature), &signature_length)
+        == WALLY_OK
+        && signature_length <= sizeof(signature)
+        && unified_signature_verify_schnorr(
+            output_key, sizeof(output_key), digest, digest_length, signature, signature_length);
+}
+
+static bool verify_unified_ecdsa_signature(const struct wally_psbt* psbt, const size_t input_index,
+    const struct ext_key* signing_key, const uint8_t* digest, const size_t digest_length)
+{
+    const struct wally_psbt_input* const input = &psbt->inputs[input_index];
+    size_t signature_position = 0;
+    if (wally_psbt_input_find_signature(input, signing_key->pub_key, sizeof(signing_key->pub_key), &signature_position)
+            != WALLY_OK
+        || !signature_position) {
+        return false;
+    }
+    const struct wally_map_item* const stored_signature = &input->signatures.items[signature_position - 1];
+    return unified_signature_verify_ecdsa(signing_key->pub_key, sizeof(signing_key->pub_key), digest, digest_length,
+        stored_signature->value, stored_signature->value_len);
+}
+
+static bool verify_unified_input_signature(const struct wally_psbt* psbt, const size_t input_index,
+    const key_iter* key_iterator, const uint8_t* digest, const size_t digest_length)
+{
+    if (key_iterator->is_taproot) {
+        return verify_unified_taproot_signature(psbt, input_index, digest, digest_length);
+    }
+    return verify_unified_ecdsa_signature(psbt, input_index, &key_iterator->hdkey, digest, digest_length);
+}
+#endif
+
+static bool get_input_signature_hash(struct wally_psbt* psbt, const size_t input_index,
+    const struct wally_tx* transaction, const uint32_t signature_type, const uint8_t* scriptcode,
+    const size_t scriptcode_length, uint8_t* digest, const size_t digest_length)
 {
 #ifdef CONFIG_XBT
-    return false;
+    return get_unified_input_signature_hash(
+        psbt, input_index, transaction, signature_type, scriptcode, scriptcode_length, digest, digest_length);
 #else
-    return wally_psbt_get_input_signature_hash(psbt, index, tx, scriptcode, scriptcode_len, 0, txhash, txhash_len)
+    return wally_psbt_get_input_signature_hash(
+               psbt, input_index, transaction, scriptcode, scriptcode_length, 0, digest, digest_length)
         == WALLY_OK;
 #endif
 }
 
+// Sign a psbt/pset - the passed wally psbt struct is updated with any signatures.
+// Returns 0 if no errors occurred - does not necessarily indicate that signatures were added.
+// Returns an rpc/message error code on error, and the error string should be populated.
 int sign_psbt(jade_process_t* process, CborValue* params, const network_t network_id, struct wally_psbt* psbt,
     const char** errmsg)
 {
     JADE_ASSERT(psbt);
     JADE_INIT_OUT_PPTR(errmsg);
     JADE_ASSERT(network_id != NETWORK_NONE);
-#ifdef CONFIG_XBT
-    *errmsg = "XBT signing is not available yet";
-    return CBOR_RPC_BAD_PARAMETERS;
-#endif
     int retval = 0;
 
     size_t is_elements = 0;
@@ -882,6 +996,15 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
             retval = CBOR_RPC_BAD_PARAMETERS;
             goto cleanup;
         }
+#ifdef CONFIG_XBT
+        if (wally_psbt_set_input_sighash(psbt, index, UNIFIED_SIGHASH_ALL) != WALLY_OK
+            || !taproot_signature_is_absent_or_unified(psbt, index)) {
+            JADE_LOGW("Input %u has a signature without the unified sighash", index);
+            *errmsg = "Input has a signature without the unified sighash";
+            retval = CBOR_RPC_BAD_PARAMETERS;
+            goto cleanup;
+        }
+#endif
 
         // Track the types of the input prevout scripts
         if (utxo->script && utxo->script_len) {
@@ -1095,7 +1218,8 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
                    psbt, index, script, script_len, scriptcode, sizeof(scriptcode), &scriptcode_len)
                 != WALLY_OK
             || scriptcode_len > sizeof(scriptcode)
-            || !get_input_signature_hash(psbt, index, tx, scriptcode, scriptcode_len, txhash, sizeof(txhash))) {
+            || !get_input_signature_hash(
+                psbt, index, tx, sig_types[index], scriptcode, scriptcode_len, txhash, sizeof(txhash))) {
             JADE_LOGE("Failed to generate tx input hash");
             *errmsg = "Failed to generate tx input hash";
             retval = CBOR_RPC_INTERNAL_ERROR;
@@ -1113,6 +1237,13 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
                 retval = CBOR_RPC_INTERNAL_ERROR;
                 goto cleanup;
             }
+#ifdef CONFIG_XBT
+            if (!verify_unified_input_signature(psbt, index, &iter, txhash, sizeof(txhash))) {
+                *errmsg = "Failed to verify the unified signature";
+                retval = CBOR_RPC_INTERNAL_ERROR;
+                goto cleanup;
+            }
+#endif
             // Loop in case we need sign again - ie. we are multiple signers in a multisig
             // Continue search from next key index position
             key_iter_next(&iter);
