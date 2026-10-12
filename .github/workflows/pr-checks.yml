@@ -260,6 +260,14 @@ jobs:
               sys.exit(f'{skipped} XBT tests were skipped: the firmware did not report JADE_CHAIN XBT')
           EOF
 
+      - name: Run the unified signature selfcheck
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          ./libjade/make_libjade.sh Sanitize --xbt -DSELFCHECK=unified_signature
+          LD_PRELOAD="$ASAN_SO" python ./jade_cli.py --device libjade selfcheck
+
       - name: Upload test results
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
