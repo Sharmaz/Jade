@@ -168,6 +168,7 @@ void __wrap_abort(void);
 #include "./utils/shake256.c"
 #include "./utils/temporary_stack.c"
 #include "./utils/unified_sighash.c"
+#include "./utils/unified_signature.c"
 #include "./utils/urldecode.c"
 #include "./utils/util.c"
 #include "./utils/wally_ext.c"
