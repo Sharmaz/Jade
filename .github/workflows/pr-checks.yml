@@ -288,6 +288,9 @@ jobs:
       KNOTS_VERSION: 29.4.2.knots20260508
       KNOTS_RELEASE_URL: https://bitcoinknots.org/files/29.x/29.4.2.knots20260508
       KNOTS_TARBALL_SHA256: b59d0445a317e21a03dc29425db3aba79b27d5125230b1a2b1dce62e120827c5
+      BITCOIN_CORE_VERSION: '31.1'
+      BITCOIN_CORE_RELEASE_URL: https://bitcoincore.org/bin/bitcoin-core-31.1
+      BITCOIN_CORE_TARBALL_SHA256: b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e
     steps:
       - uses: actions/checkout@v7
         with:
@@ -312,6 +315,23 @@ jobs:
           echo "$KNOTS_TARBALL_SHA256  knots-tarball/$knots_tarball_name" | sha256sum -c -
           tar -xzf "knots-tarball/$knots_tarball_name" -C knots
 
+      - name: Restore the Bitcoin Core tarball
+        uses: actions/cache@v6
+        with:
+          path: bitcoin-core-tarball
+          key: bitcoin-core-${{ env.BITCOIN_CORE_VERSION }}-x86_64-linux-gnu
+
+      - name: Download and check Bitcoin Core
+        run: |
+          bitcoin_core_tarball_name="bitcoin-$BITCOIN_CORE_VERSION-x86_64-linux-gnu.tar.gz"
+          mkdir -p bitcoin-core-tarball bitcoin-core
+          if [ ! -f "bitcoin-core-tarball/$bitcoin_core_tarball_name" ]; then
+            curl -fsSL -o "bitcoin-core-tarball/$bitcoin_core_tarball_name" \
+              "$BITCOIN_CORE_RELEASE_URL/$bitcoin_core_tarball_name"
+          fi
+          echo "$BITCOIN_CORE_TARBALL_SHA256  bitcoin-core-tarball/$bitcoin_core_tarball_name" | sha256sum -c -
+          tar -xzf "bitcoin-core-tarball/$bitcoin_core_tarball_name" -C bitcoin-core
+
       - name: Fetch managed components
         run: |
           pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
@@ -330,15 +350,16 @@ jobs:
           pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
           ./libjade/make_libjade.sh Debug --xbt
 
-      - name: Run the Knots regtest test
+      - name: Run the regtest tests with Knots and Bitcoin Core
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
           export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
           export KNOTS_BINARY_DIRECTORY="$PWD/knots/bitcoin-$KNOTS_VERSION/bin"
+          export BITCOIN_CORE_BINARY_DIRECTORY="$PWD/bitcoin-core/bitcoin-$BITCOIN_CORE_VERSION/bin"
           pytest -v --libjade --junitxml=pytest-xbt-regtest.xml tests/xbt_regtest
 
-      - name: Check that the Knots regtest test was not skipped
+      - name: Check that no regtest test was skipped
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           python3 - <<'EOF'
@@ -348,7 +369,7 @@ jobs:
           test_suites = ElementTree.parse('pytest-xbt-regtest.xml').getroot().iter('testsuite')
           skipped_test_count = sum(int(test_suite.get('skipped', 0)) for test_suite in test_suites)
           if skipped_test_count:
-              sys.exit(f'{skipped_test_count} Knots regtest tests were skipped: the firmware is not XBT or Knots is missing')
+              sys.exit(f'{skipped_test_count} regtest tests were skipped: the firmware is not XBT, or Knots or Bitcoin Core is missing')
           EOF
 
       - name: Upload test results
