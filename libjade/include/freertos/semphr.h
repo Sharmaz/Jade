@@ -73,6 +73,26 @@ static inline void vSemaphoreDelete(SemaphoreHandle_t s)
     free(s);
 }
 
+static inline int semaphore_wait_retrying_on_signal(sem_t* semaphore)
+{
+    while (sem_wait(semaphore)) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static inline int semaphore_timed_wait_retrying_on_signal(sem_t* semaphore, const struct timespec* deadline)
+{
+    while (sem_timedwait(semaphore, deadline)) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static inline int xSemaphoreTake(SemaphoreHandle_t s, int timeout)
 {
     struct timespec ts;
@@ -80,14 +100,14 @@ static inline int xSemaphoreTake(SemaphoreHandle_t s, int timeout)
     switch (s->type) {
     case SEMAPHORE_TYPE_BINARY:
         if (timeout == portMAX_DELAY) {
-            if (sem_wait(&s->binary)) {
+            if (semaphore_wait_retrying_on_signal(&s->binary)) {
                 JADE_LOGE("Unknown error waiting for semaphore (sem_wait): %d", errno);
                 abort();
             }
             return pdTRUE;
         }
         ts = absolute_timespec_from_ticktype(timeout);
-        if (sem_timedwait(&s->binary, &ts)) {
+        if (semaphore_timed_wait_retrying_on_signal(&s->binary, &ts)) {
             switch (errno) {
             case 0:
                 break;
