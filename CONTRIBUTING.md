@@ -31,25 +31,28 @@ Each command block below is self-contained: copy it as a whole and paste it into
 | libjade tests with sanitizers | When changing C code | Longer than the plain libjade tests |
 | XBT libjade tests | When changing XBT code (`CONFIG_XBT`) or the unified sighash | 5 minutes |
 | XBT libjade tests with sanitizers | When changing XBT C code or the unified sighash | Longer than the XBT libjade tests |
+| XBT regtest test with Knots | When changing XBT signing or the Knots version | 5 minutes plus the Knots download |
 | Firmware builds | When changing firmware code or board configurations | 3 minutes per board |
 | XBT firmware builds | When changing XBT code or board configurations | 3 minutes per board |
-
-Commit your changes before running the checks: `format.sh` rewrites files in place, so any file it changes shows up in `git status`.
 
 ### Format
 
 ```bash
 JADE_BUILDER=blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
 docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE_BUILDER" bash -c '
+  git config --global --add safe.directory /host/jade &&
   pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null &&
-  ! git grep -I "%zu" main/ libjade/ &&
-  ./format.sh'
-git status --short
+  { git grep -I "%zu" main/ libjade/; test $? -eq 1; } &&
+  checksums_before_format=$(mktemp) &&
+  git ls-files --cached --others --exclude-standard -z main libjade tools | xargs -0 -r sha256sum > "$checksums_before_format" &&
+  ./format.sh &&
+  sha256sum --quiet --check "$checksums_before_format" &&
+  echo "Format check passed: format.sh changed no file"'
 ```
 
-Any file listed by `git status` that you did not change was reformatted: review it and commit it.
+The check passes when the output ends with `Format check passed: format.sh changed no file`. It works with uncommitted changes. `format.sh` rewrites files in place: if it reformats a file, the check lists it as `FAILED` and stops, so review the change and keep it. A `%zu` format specifier, which the firmware does not support, is listed and stops the check too.
 
-The output includes Kconfig style warnings for `main/Kconfig.projbuild` ("line should be shorter than 120 characters", "common prefix for the config names"). They come from the upstream file and do not fail the check.
+The output also includes style warnings for `main/Kconfig.projbuild` ("line should be shorter than 120 characters", "common prefix for the config names"), followed by `1 file have errors. Please take a look at the log.` They come from the upstream file: `format.sh` ignores them, and they do not fail the check.
 
 ### libjade tests
 
@@ -73,12 +76,16 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
   pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null &&
   ./tools/switch_to.sh jade --dev --noradio &&
   pip install -q -r pinserver/requirements.txt && pip install -q . && pip install -q pytest &&
-  ./libjade/make_libjade.sh Sanitize &&
+  ./libjade/make_libjade.sh Sanitize -DSELFCHECK=semaphore &&
   export LD_LIBRARY_PATH=$PWD/build_linux/libjade ASAN_OPTIONS=symbolize=1,detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 &&
   export ASAN_SO=$(gcc -print-file-name=libasan.so) &&
+  LD_PRELOAD=$ASAN_SO python ./jade_cli.py --device libjade selfcheck &&
+  ./libjade/make_libjade.sh Sanitize -DSELFCHECK= &&
   LD_PRELOAD=$ASAN_SO python ./test_jade.py --log CRITICAL --libjade &&
   LD_PRELOAD=$ASAN_SO pytest -v --libjade tests'
 ```
+
+The first build runs the `semaphore` selfcheck (`libjade/selfcheck/semaphore.c`), which interrupts the semaphore waits of the libjade FreeRTOS emulation with signals and checks that they retry instead of aborting. CMake keeps the last `SELFCHECK` value in `build_linux`, so the second build passes `-DSELFCHECK=` to restore the default selfcheck that `test_jade.py` runs.
 
 ### XBT libjade tests
 
@@ -130,7 +137,56 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
 
 libjade is built with `-fno-sanitize-recover=all`, so the first memory error or undefined behavior stops the run. A failure here points to a real bug in the code, not to a flaky run.
 
-Before running the plain libjade tests again after either XBT check, rebuild libjade without `--xbt`: the rest of the suite uses the Bitcoin and Liquid networks.
+### XBT regtest test with Knots
+
+The end-to-end check of the XBT signing: a Bitcoin Knots node in regtest, with the BLAKE2b fork active from height 200, funds a watch-only wallet built from the xpub of the XBT libjade, and creates a PSBT. libjade signs it on `xbt-regtest`, and Knots finalizes, accepts and mines it. The test also checks that the witness signature ends with the unified sighash byte (`0x21`), because Knots accepts legacy signatures too. The tests in `tests/xbt_regtest` skip themselves unless the firmware is XBT and `KNOTS_BINARY_DIRECTORY` points to the `bin` folder of Knots.
+
+```bash
+JADE_BUILDER=blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE_BUILDER" bash -c '
+  knots_version=29.4.2.knots20260508 &&
+  knots_tarball_name=bitcoin-$knots_version-x86_64-linux-gnu.tar.gz &&
+  knots_tarball_sha256=b59d0445a317e21a03dc29425db3aba79b27d5125230b1a2b1dce62e120827c5 &&
+  curl -fsSL -o /tmp/$knots_tarball_name https://bitcoinknots.org/files/29.x/$knots_version/$knots_tarball_name &&
+  echo "$knots_tarball_sha256  /tmp/$knots_tarball_name" | sha256sum -c - &&
+  tar -xzf /tmp/$knots_tarball_name -C /tmp &&
+  pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null &&
+  ./tools/switch_to.sh jade --dev --noradio &&
+  pip install -q -r pinserver/requirements.txt && pip install -q . && pip install -q pytest &&
+  ./libjade/make_libjade.sh Debug --xbt &&
+  export LD_LIBRARY_PATH=$PWD/build_linux/libjade KNOTS_BINARY_DIRECTORY=/tmp/bitcoin-$knots_version/bin &&
+  pytest -v --libjade tests/xbt_regtest'
+```
+
+The version and the SHA256 of the Knots tarball are pinned here and in the `xbt-regtest` job of `PR checks`.
+
+### Updating Knots
+
+Repeat these steps for every new Knots release, before changing the pinned version.
+
+1. On your machine (it needs `gpg`), verify the signatures of the release checksums in a temporary keyring, with the builder keys of the Knots Guix signature repository:
+
+   ```bash
+   knots_version=29.4.2.knots20260508
+   knots_release_url=https://bitcoinknots.org/files/29.x/$knots_version
+   mkdir -p ~/knots-verify/$knots_version && cd ~/knots-verify/$knots_version
+   export GNUPGHOME="$PWD/gnupg"
+   mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
+   curl -fsSLO "$knots_release_url/SHA256SUMS"
+   curl -fsSLO "$knots_release_url/SHA256SUMS.asc"
+   git clone --quiet --depth 1 --branch knots https://github.com/bitcoinknots/guix.sigs
+   gpg --quiet --import guix.sigs/builder-keys/*.gpg
+   gpg --verify SHA256SUMS.asc SHA256SUMS
+   grep x86_64-linux-gnu.tar.gz SHA256SUMS
+   ```
+
+   `gpg --verify` must report several `Good signature` lines. The `not certified with a trusted signature` warnings are expected in a temporary keyring.
+
+2. Compare at least two of the signing keys with a second source that does not depend on that repository: the key list of the signer's GitHub account (`https://github.com/<user>.gpg`) or `keys.openpgp.org` searched by email. The fingerprints must match; a different expiry date only means that the owner extended it.
+3. Update `KNOTS_VERSION`, `KNOTS_RELEASE_URL` and `KNOTS_TARBALL_SHA256` in the `xbt-regtest` job, and the version and hash in the command block of the previous section, with the `SHA256SUMS` line of the `x86_64-linux-gnu.tar.gz` tarball.
+4. If `src/test/data/unified_sighash.json` changed in the new Knots release, update `tests/rpc/data/unified_sighash/unified_sighash.json` and its pinned hash, `VECTORS_FILE_GIT_BLOB_HASH` in `tests/rpc/test_unified_sighash.py`.
+
+Before running the plain libjade tests again after any XBT check, rebuild libjade without `--xbt`: the rest of the suite uses the Bitcoin and Liquid networks.
 
 ### Firmware builds
 
@@ -166,7 +222,7 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
 
 ## Continuous integration
 
-- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master`, and on demand with "Run workflow": format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, and the XBT libjade tests with sanitizers. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, fails if any XBT test was skipped, and runs the `unified_signature` selfcheck. The "XBT libjade tests with sanitizers" check runs the same steps locally. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
+- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master`, and on demand with "Run workflow": format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, the XBT libjade tests with sanitizers, and the XBT regtest test with Knots. The libjade job with sanitizers also runs the `semaphore` selfcheck, and the "libjade tests with sanitizers" check runs it locally. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, fails if any XBT test was skipped, and runs the `unified_signature` selfcheck. The "XBT libjade tests with sanitizers" check runs the same steps locally. The `xbt-regtest` job runs the Knots regtest test, with the Knots tarball pinned by SHA256 and cached between runs; the "XBT regtest test with Knots" check runs it locally. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
 - `PR checks` does not run again after a merge. The `master` ruleset requires a branch to be up to date with `master` before it can be merged, so the run of the pull request already tested exactly what lands on `master`. When `master` moves while a pull request is open, update the branch ("Update branch") and wait for the checks again. To get the firmware images of `master`, run `PR checks` on `master` with "Run workflow".
 - **`Scheduled checks`** (`.github/workflows/scheduled-checks.yml`) runs every Monday at 06:00 UTC and on demand: firmware builds for every DIY board, libjade selfchecks, CodeQL analysis and, on demand, a coverage report.
 - The image digest (`jade_builder@sha256:…`) appears in both workflows and in every command block of this guide. When it changes, update all of them together.
