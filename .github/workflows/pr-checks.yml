@@ -276,6 +276,89 @@ jobs:
           path: pytest-libjade-xbt.xml
           if-no-files-found: ignore
 
+  xbt-regtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    env:
+      KNOTS_VERSION: 29.4.2.knots20260508
+      KNOTS_RELEASE_URL: https://bitcoinknots.org/files/29.x/29.4.2.knots20260508
+      KNOTS_TARBALL_SHA256: b59d0445a317e21a03dc29425db3aba79b27d5125230b1a2b1dce62e120827c5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Trust the repository directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Restore the Knots tarball
+        uses: actions/cache@v6
+        with:
+          path: knots-tarball
+          key: knots-${{ env.KNOTS_VERSION }}-x86_64-linux-gnu
+
+      - name: Download and check Knots
+        run: |
+          knots_tarball_name="bitcoin-$KNOTS_VERSION-x86_64-linux-gnu.tar.gz"
+          mkdir -p knots-tarball knots
+          if [ ! -f "knots-tarball/$knots_tarball_name" ]; then
+            curl -fsSL -o "knots-tarball/$knots_tarball_name" "$KNOTS_RELEASE_URL/$knots_tarball_name"
+          fi
+          echo "$KNOTS_TARBALL_SHA256  knots-tarball/$knots_tarball_name" | sha256sum -c -
+          tar -xzf "knots-tarball/$knots_tarball_name" -C knots
+
+      - name: Fetch managed components
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./tools/switch_to.sh jade --dev --noradio
+
+      - name: Install test dependencies
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          pip install -r pinserver/requirements.txt
+          pip install .
+          pip install pytest
+
+      - name: Build XBT libjade
+        id: build
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          ./libjade/make_libjade.sh Debug --xbt
+
+      - name: Run the Knots regtest test
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          export KNOTS_BINARY_DIRECTORY="$PWD/knots/bitcoin-$KNOTS_VERSION/bin"
+          pytest -v --libjade --junitxml=pytest-xbt-regtest.xml tests/xbt_regtest
+
+      - name: Check that the Knots regtest test was not skipped
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          python3 - <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ElementTree
+
+          test_suites = ElementTree.parse('pytest-xbt-regtest.xml').getroot().iter('testsuite')
+          skipped_test_count = sum(int(test_suite.get('skipped', 0)) for test_suite in test_suites)
+          if skipped_test_count:
+              sys.exit(f'{skipped_test_count} Knots regtest tests were skipped: the firmware is not XBT or Knots is missing')
+          EOF
+
+      - name: Upload test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-xbt-regtest
+          path: pytest-xbt-regtest.xml
+          if-no-files-found: ignore
+
   libjade-sanitize:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -357,6 +440,14 @@ jobs:
           fi
           LD_PRELOAD="$ASAN_SO" python ./test_jade.py --log CRITICAL --serialport "$socket_link" --serialtimeout 30
           LD_PRELOAD="$ASAN_SO" pytest -v --device "$socket_link" --junitxml=pytest-sanitize-serial.xml tests
+
+      - name: Run the semaphore selfcheck
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null
+          export LD_LIBRARY_PATH="$PWD/build_linux/libjade"
+          ./libjade/make_libjade.sh Sanitize -DSELFCHECK=semaphore
+          LD_PRELOAD="$ASAN_SO" python ./jade_cli.py --device libjade selfcheck
 
       - name: Upload test results
         if: ${{ always() }}
