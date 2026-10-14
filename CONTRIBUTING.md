@@ -31,7 +31,7 @@ Each command block below is self-contained: copy it as a whole and paste it into
 | libjade tests with sanitizers | When changing C code | Longer than the plain libjade tests |
 | XBT libjade tests | When changing XBT code (`CONFIG_XBT`) or the unified sighash | 5 minutes |
 | XBT libjade tests with sanitizers | When changing XBT C code or the unified sighash | Longer than the XBT libjade tests |
-| XBT regtest test with Knots | When changing XBT signing or the Knots version | 5 minutes plus the Knots download |
+| XBT regtest tests with Knots and Bitcoin Core | When changing XBT signing, or the Knots or Bitcoin Core version | 5 minutes plus the downloads |
 | Firmware builds | When changing firmware code or board configurations | 3 minutes per board |
 | XBT firmware builds | When changing XBT code or board configurations | 3 minutes per board |
 
@@ -137,9 +137,14 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
 
 libjade is built with `-fno-sanitize-recover=all`, so the first memory error or undefined behavior stops the run. A failure here points to a real bug in the code, not to a flaky run.
 
-### XBT regtest test with Knots
+### XBT regtest tests with Knots and Bitcoin Core
 
-The end-to-end check of the XBT signing: a Bitcoin Knots node in regtest, with the BLAKE2b fork active from height 200, funds a watch-only wallet built from the xpub of the XBT libjade, and creates a PSBT. libjade signs it on `xbt-regtest`, and Knots finalizes, accepts and mines it. The test also checks that the witness signature ends with the unified sighash byte (`0x21`), because Knots accepts legacy signatures too. The tests in `tests/xbt_regtest` skip themselves unless the firmware is XBT and `KNOTS_BINARY_DIRECTORY` points to the `bin` folder of Knots.
+The end-to-end checks of the XBT signing, in `tests/xbt_regtest`:
+
+- **Knots accepts the XBT signatures.** A Bitcoin Knots node in regtest, with the BLAKE2b fork active from height 200, funds a watch-only wallet built from the xpub of the XBT libjade, and creates a PSBT. libjade signs it on `xbt-regtest`, and Knots finalizes, accepts and mines it. The test also checks that the witness signature ends with the unified sighash byte (`0x21`), because Knots accepts legacy signatures too.
+- **Bitcoin Core rejects them: the replay protection.** Before the fork, Knots mines a coin for each account type of the MVP (P2PKH, P2SH-P2WPKH, P2WPKH and P2TR), and those blocks are copied to a Bitcoin Core node in regtest, so the coins exist in both chains. After the fork, libjade signs a spend of each coin: Knots accepts it, and Bitcoin Core rejects it both in its mempool and in a block. The same transaction signed by the test with the Bitcoin signature hash is accepted by Bitcoin Core in both.
+
+The tests skip themselves unless the firmware is XBT and `KNOTS_BINARY_DIRECTORY` points to the `bin` folder of Knots. The replay test also needs `BITCOIN_CORE_BINARY_DIRECTORY`, the `bin` folder of Bitcoin Core.
 
 ```bash
 JADE_BUILDER=blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
@@ -150,15 +155,23 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
   curl -fsSL -o /tmp/$knots_tarball_name https://bitcoinknots.org/files/29.x/$knots_version/$knots_tarball_name &&
   echo "$knots_tarball_sha256  /tmp/$knots_tarball_name" | sha256sum -c - &&
   tar -xzf /tmp/$knots_tarball_name -C /tmp &&
+  bitcoin_core_version=31.1 &&
+  bitcoin_core_tarball_name=bitcoin-$bitcoin_core_version-x86_64-linux-gnu.tar.gz &&
+  bitcoin_core_tarball_sha256=b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e &&
+  bitcoin_core_release_url=https://bitcoincore.org/bin/bitcoin-core-$bitcoin_core_version &&
+  curl -fsSL -o /tmp/$bitcoin_core_tarball_name $bitcoin_core_release_url/$bitcoin_core_tarball_name &&
+  echo "$bitcoin_core_tarball_sha256  /tmp/$bitcoin_core_tarball_name" | sha256sum -c - &&
+  tar -xzf /tmp/$bitcoin_core_tarball_name -C /tmp &&
   pushd /opt/esp/idf >/dev/null && . ./export.sh >/dev/null && popd >/dev/null &&
   ./tools/switch_to.sh jade --dev --noradio &&
   pip install -q -r pinserver/requirements.txt && pip install -q . && pip install -q pytest &&
   ./libjade/make_libjade.sh Debug --xbt &&
   export LD_LIBRARY_PATH=$PWD/build_linux/libjade KNOTS_BINARY_DIRECTORY=/tmp/bitcoin-$knots_version/bin &&
+  export BITCOIN_CORE_BINARY_DIRECTORY=/tmp/bitcoin-$bitcoin_core_version/bin &&
   pytest -v --libjade tests/xbt_regtest'
 ```
 
-The version and the SHA256 of the Knots tarball are pinned here and in the `xbt-regtest` job of `PR checks`.
+The versions and the SHA256 of the Knots and Bitcoin Core tarballs are pinned here and in the `xbt-regtest` job of `PR checks`.
 
 ### Updating Knots
 
@@ -185,6 +198,32 @@ Repeat these steps for every new Knots release, before changing the pinned versi
 2. Compare at least two of the signing keys with a second source that does not depend on that repository: the key list of the signer's GitHub account (`https://github.com/<user>.gpg`) or `keys.openpgp.org` searched by email. The fingerprints must match; a different expiry date only means that the owner extended it.
 3. Update `KNOTS_VERSION`, `KNOTS_RELEASE_URL` and `KNOTS_TARBALL_SHA256` in the `xbt-regtest` job, and the version and hash in the command block of the previous section, with the `SHA256SUMS` line of the `x86_64-linux-gnu.tar.gz` tarball.
 4. If `src/test/data/unified_sighash.json` changed in the new Knots release, update `tests/rpc/data/unified_sighash/unified_sighash.json` and its pinned hash, `VECTORS_FILE_GIT_BLOB_HASH` in `tests/rpc/test_unified_sighash.py`.
+
+### Updating Bitcoin Core
+
+The replay test runs against a pinned Bitcoin Core release. Repeat these steps for every new release, before changing the pinned version.
+
+1. On your machine (it needs `gpg`), verify the signatures of the release checksums in a temporary keyring, with the builder keys of the Bitcoin Core Guix signature repository:
+
+   ```bash
+   bitcoin_core_version=31.1
+   bitcoin_core_release_url=https://bitcoincore.org/bin/bitcoin-core-$bitcoin_core_version
+   mkdir -p ~/bitcoin-core-verify/$bitcoin_core_version && cd ~/bitcoin-core-verify/$bitcoin_core_version
+   export GNUPGHOME="$PWD/gnupg"
+   mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
+   curl -fsSLO "$bitcoin_core_release_url/SHA256SUMS"
+   curl -fsSLO "$bitcoin_core_release_url/SHA256SUMS.asc"
+   git clone --quiet --depth 1 https://github.com/bitcoin-core/guix.sigs
+   gpg --quiet --import guix.sigs/builder-keys/*.gpg
+   gpg --verify SHA256SUMS.asc SHA256SUMS
+   grep x86_64-linux-gnu.tar.gz SHA256SUMS
+   ```
+
+   `gpg --verify` must report several `Good signature` lines. The `not certified with a trusted signature` warnings are expected in a temporary keyring.
+
+2. Compare at least two of the signing keys with a second source, as for Knots. Some signers publish no key on their GitHub account; for them, search `keys.openpgp.org` by the email of their signature: `curl -fsSL "https://keys.openpgp.org/vks/v1/by-email/<email>" | gpg --show-keys`.
+3. Update `BITCOIN_CORE_VERSION`, `BITCOIN_CORE_RELEASE_URL` and `BITCOIN_CORE_TARBALL_SHA256` in the `xbt-regtest` job, and the version and hash in the command block of the "XBT regtest tests with Knots and Bitcoin Core" section, with the `SHA256SUMS` line of the `x86_64-linux-gnu.tar.gz` tarball.
+4. Run that block. If the new release words its script verification failures differently, update the expected reject reasons in `tests/xbt_regtest/test_xbt_replay.py`.
 
 Before running the plain libjade tests again after any XBT check, rebuild libjade without `--xbt`: the rest of the suite uses the Bitcoin and Liquid networks.
 
@@ -222,7 +261,7 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
 
 ## Continuous integration
 
-- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master`, and on demand with "Run workflow": format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, the XBT libjade tests with sanitizers, and the XBT regtest test with Knots. The libjade job with sanitizers also runs the `semaphore` selfcheck, and the "libjade tests with sanitizers" check runs it locally. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, fails if any XBT test was skipped, and runs the `unified_signature` selfcheck. The "XBT libjade tests with sanitizers" check runs the same steps locally. The `xbt-regtest` job runs the Knots regtest test, with the Knots tarball pinned by SHA256 and cached between runs; the "XBT regtest test with Knots" check runs it locally. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
+- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master`, and on demand with "Run workflow": format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, the XBT libjade tests with sanitizers, and the XBT regtest tests with Knots and Bitcoin Core. The libjade job with sanitizers also runs the `semaphore` selfcheck, and the "libjade tests with sanitizers" check runs it locally. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, fails if any XBT test was skipped, and runs the `unified_signature` selfcheck. The "XBT libjade tests with sanitizers" check runs the same steps locally. The `xbt-regtest` job runs the regtest tests with Knots and Bitcoin Core, with both tarballs pinned by SHA256 and cached between runs; the "XBT regtest tests with Knots and Bitcoin Core" check runs them locally. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
 - `PR checks` does not run again after a merge. The `master` ruleset requires a branch to be up to date with `master` before it can be merged, so the run of the pull request already tested exactly what lands on `master`. When `master` moves while a pull request is open, update the branch ("Update branch") and wait for the checks again. To get the firmware images of `master`, run `PR checks` on `master` with "Run workflow".
 - **`Scheduled checks`** (`.github/workflows/scheduled-checks.yml`) runs every Monday at 06:00 UTC and on demand: firmware builds for every DIY board, libjade selfchecks, CodeQL analysis and, on demand, a coverage report.
 - The image digest (`jade_builder@sha256:…`) appears in both workflows and in every command block of this guide. When it changes, update all of them together.
