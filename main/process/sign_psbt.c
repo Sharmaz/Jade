@@ -874,6 +874,12 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
 
     size_t is_elements = 0;
     JADE_WALLY_VERIFY(wally_psbt_is_elements(psbt, &is_elements));
+#ifdef CONFIG_XBT
+    if (is_elements) {
+        *errmsg = "Liquid transactions are not supported";
+        return CBOR_RPC_BAD_PARAMETERS;
+    }
+#endif
     if (!is_elements != !network_is_liquid(network_id)) {
         *errmsg = "Network/psbt type mismatch";
         return CBOR_RPC_BAD_PARAMETERS;
