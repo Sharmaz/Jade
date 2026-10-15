@@ -26,11 +26,13 @@ NON_UNIFIED_SIGNATURE_ERROR_MESSAGE = 'Input has a signature without the unified
 UNIFIED_SIGNATURE_VERIFICATION_ERROR_MESSAGE = 'Failed to verify the unified signature'
 MISSING_UTXO_ERROR_MESSAGE = 'Input utxo missing'
 NON_SINGLESIG_INPUT_ERROR_MESSAGE = 'Only singlesig inputs are supported'
+LIQUID_PSET_ERROR_MESSAGE = 'Liquid transactions are not supported'
 UNSUPPORTED_SIGHASH_REQUEST_ID = 'bad_sighash'
 NON_UNIFIED_SIGNATURE_REQUEST_ID = 'prior_signature'
 SIGNATURE_OVER_ANOTHER_DIGEST_REQUEST_ID = 'other_digest'
 MISSING_UTXO_REQUEST_ID = 'missing_utxo'
 NON_SINGLESIG_INPUT_REQUEST_ID = 'non_singlesig'
+LIQUID_PSET_REQUEST_ID = 'liquid_pset'
 
 FIXTURE_DIRECTORY = 'tests/rpc/data/sign_psbt'
 BASE64_PREFIX = 'b64:'
@@ -79,6 +81,16 @@ DEFAULT_MNEMONIC_FIXTURES_WITH_MULTISIG_INPUT = [
     'psbt_tm_multisig_segwit',
     'psbt_tm_multisig_segwit_many_inputs_2',
 ]
+LIQUID_PSET_SIGNING_NETWORK = 'xbt-regtest'
+LIQUID_PSET_FIXTURES = [
+    'pset_ss_p2pkh',
+    'pset_ss_p2sh_p2wpkh',
+    'pset_ss_p2sh_p2wpkh_maker_swap',
+    'pset_ss_p2tr',
+    'pset_ss_p2wpkh',
+    'pset_tm_green_multisig_2of2_norecovery_p2wsh',
+    'pset_tm_green_multisig_2of2csv',
+]
 
 SCRIPT_TYPE_BY_SIGNATURE_TYPE = {
     wally.WALLY_SIGTYPE_PRE_SW: SCRIPT_TYPE_BASE,
@@ -108,6 +120,12 @@ def _load_fixture(fixture_name):
 def _fixture_parameters(fixture_names):
     return [pytest.param(_load_fixture(fixture_name), id=fixture_name)
             for fixture_name in fixture_names]
+
+
+def _load_pset_bytes(fixture_name):
+    with open(f'{FIXTURE_DIRECTORY}/{fixture_name}.json', 'r') as fixture_file:
+        fixture_json = json.load(fixture_file)
+    return _decode_psbt(fixture_json['input']['psbt'])
 
 
 def _input_indexes(psbt):
@@ -425,3 +443,10 @@ def test_xbt_rejects_psbt_with_other_wallet_input_missing_utxo(jade, mnemonic):
     psbt_bytes = _with_other_wallet_input_missing_utxo(fixture.psbt_bytes, MISSING_UTXO_INPUT_INDEX)
     _check_sign_psbt_bad_parameters(jade, MISSING_UTXO_REQUEST_ID, fixture.network, psbt_bytes,
                                     MISSING_UTXO_ERROR_MESSAGE)
+
+
+@pytest.mark.parametrize('fixture_name', LIQUID_PSET_FIXTURES)
+def test_xbt_rejects_liquid_pset(jade, fixture_name):
+    _check_sign_psbt_bad_parameters(jade, LIQUID_PSET_REQUEST_ID, LIQUID_PSET_SIGNING_NETWORK,
+                                    _load_pset_bytes(fixture_name),
+                                    LIQUID_PSET_ERROR_MESSAGE)
