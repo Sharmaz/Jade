@@ -25,10 +25,12 @@ UNSUPPORTED_SIGHASH_ERROR_MESSAGE = 'Unsupported sighash value'
 NON_UNIFIED_SIGNATURE_ERROR_MESSAGE = 'Input has a signature without the unified sighash'
 UNIFIED_SIGNATURE_VERIFICATION_ERROR_MESSAGE = 'Failed to verify the unified signature'
 MISSING_UTXO_ERROR_MESSAGE = 'Input utxo missing'
+NON_SINGLESIG_INPUT_ERROR_MESSAGE = 'Only singlesig inputs are supported'
 UNSUPPORTED_SIGHASH_REQUEST_ID = 'bad_sighash'
 NON_UNIFIED_SIGNATURE_REQUEST_ID = 'prior_signature'
 SIGNATURE_OVER_ANOTHER_DIGEST_REQUEST_ID = 'other_digest'
 MISSING_UTXO_REQUEST_ID = 'missing_utxo'
+NON_SINGLESIG_INPUT_REQUEST_ID = 'non_singlesig'
 
 FIXTURE_DIRECTORY = 'tests/rpc/data/sign_psbt'
 BASE64_PREFIX = 'b64:'
@@ -38,6 +40,8 @@ SIGNATURE_OVER_ANOTHER_DIGEST_INPUT_INDEX = 0
 ANOTHER_TRANSACTION_DIGEST = sha256(b'another transaction')
 MISSING_UTXO_FIXTURE = 'psbt_ss_p2wpkh'
 MISSING_UTXO_INPUT_INDEX = 1
+OTHER_WALLET_MULTISIG_FIXTURE = 'psbt_ss_p2wsh_multisig'
+OTHER_WALLET_MULTISIG_INPUT_INDEX = 0
 BITCOIN_TAPROOT_SIGNATURE_FIXTURE = 'psbt_ss_p2tr_default_all'
 BITCOIN_TAPROOT_SIGNATURE_INPUT_INDEX_PARAMETERS = [
     pytest.param(0, id='default_sighash'),
@@ -48,33 +52,34 @@ SINGLESIG_MNEMONIC_FIXTURES = [
     'psbt_ss_not_us',
     'psbt_ss_p2pkh',
     'psbt_ss_p2pkh_v2',
-    'psbt_ss_p2sh_multisig',
     'psbt_ss_p2sh_p2wpkh',
-    'psbt_ss_p2sh_p2wsh_multisig',
     'psbt_ss_p2tr_default_all',
     'psbt_ss_p2wpkh',
     'psbt_ss_p2wpkh_spend_coinbase',
-    'psbt_ss_p2wsh_multisig',
 ]
 DEFAULT_MNEMONIC_FIXTURES = [
-    'psbt_tm_multisig_partial_p2sh_segwit',
-    'psbt_tm_multisig_partial_segwit',
     'psbt_tm_multisig_segwit_many_inputs',
-    'psbt_tm_multisig_segwit_many_inputs_2',
     'psbt_tm_p2sh_segwit',
     'psbt_tm_segwit',
 ]
 SINGLESIG_MNEMONIC_FIXTURES_WITH_NON_UNIFIED_SIGNATURE = ['psbt_ss_p2wpkh_already_signed']
-DEFAULT_MNEMONIC_FIXTURES_WITH_NON_UNIFIED_SIGNATURE = [
+SINGLESIG_MNEMONIC_FIXTURES_WITH_MULTISIG_INPUT = [
+    'psbt_ss_p2sh_multisig',
+    'psbt_ss_p2sh_p2wsh_multisig',
+    'psbt_ss_p2wsh_multisig',
+]
+DEFAULT_MNEMONIC_FIXTURES_WITH_MULTISIG_INPUT = [
+    'psbt_tm_green_multisig_2of2csv',
+    'psbt_tm_green_multisig_2of3',
+    'psbt_tm_green_multisig_2of3_recovery_signing',
+    'psbt_tm_green_multisig_2of3_recovery_signing_full_path',
     'psbt_tm_multisig_p2sh_segwit',
+    'psbt_tm_multisig_partial_p2sh_segwit',
+    'psbt_tm_multisig_partial_segwit',
     'psbt_tm_multisig_segwit',
+    'psbt_tm_multisig_segwit_many_inputs_2',
 ]
 
-XBT_NETWORK_BY_BITCOIN_NETWORK = {
-    'mainnet': 'xbt',
-    'testnet': 'xbt-testnet4',
-    'localtest': 'xbt-regtest',
-}
 SCRIPT_TYPE_BY_SIGNATURE_TYPE = {
     wally.WALLY_SIGTYPE_PRE_SW: SCRIPT_TYPE_BASE,
     wally.WALLY_SIGTYPE_SW_V0: SCRIPT_TYPE_WITNESS_V0,
@@ -278,6 +283,11 @@ def _check_fixture_rejected_for_non_unified_signature(jade, fixture):
                                     fixture.psbt_bytes, NON_UNIFIED_SIGNATURE_ERROR_MESSAGE)
 
 
+def _check_fixture_rejected_for_multisig_input(jade, fixture):
+    _check_sign_psbt_bad_parameters(jade, NON_SINGLESIG_INPUT_REQUEST_ID, fixture.network,
+                                    fixture.psbt_bytes, NON_SINGLESIG_INPUT_ERROR_MESSAGE)
+
+
 def _with_declared_sighash(psbt_bytes, declared_sighash):
     psbt = wally.psbt_from_bytes(psbt_bytes, 0)
     for input_index in _input_indexes(psbt):
@@ -304,9 +314,14 @@ def _with_bitcoin_taproot_signature(psbt_bytes, bitcoin_signed_psbt_bytes, input
     return wally.psbt_to_bytes(psbt, 0)
 
 
-def _with_other_wallet_input_missing_utxo(psbt_bytes, input_index):
+def _with_other_wallet_input(psbt_bytes, input_index):
     psbt = wally.psbt_from_bytes(psbt_bytes, 0)
     wally.psbt_set_input_keypaths(psbt, input_index, wally.map_init(0, None))
+    return wally.psbt_to_bytes(psbt, 0)
+
+
+def _with_other_wallet_input_missing_utxo(psbt_bytes, input_index):
+    psbt = wally.psbt_from_bytes(_with_other_wallet_input(psbt_bytes, input_index), 0)
     wally.psbt_set_input_witness_utxo(psbt, input_index, None)
     wally.psbt_set_input_utxo(psbt, input_index, None)
     return wally.psbt_to_bytes(psbt, 0)
@@ -350,11 +365,29 @@ def test_xbt_rejects_singlesig_mnemonic_psbt_with_non_unified_signature(jade, mn
     _check_fixture_rejected_for_non_unified_signature(jade, fixture)
 
 
+@pytest.mark.mnemonic(mnemonics.singlesig)
+@pytest.mark.parametrize(
+    'fixture', _fixture_parameters(SINGLESIG_MNEMONIC_FIXTURES_WITH_MULTISIG_INPUT))
+def test_xbt_rejects_singlesig_mnemonic_psbt_with_multisig_input(jade, mnemonic, fixture):
+    _check_fixture_rejected_for_multisig_input(jade, fixture)
+
+
 @pytest.mark.mnemonic(mnemonics.default)
 @pytest.mark.parametrize(
-    'fixture', _fixture_parameters(DEFAULT_MNEMONIC_FIXTURES_WITH_NON_UNIFIED_SIGNATURE))
-def test_xbt_rejects_default_mnemonic_psbt_with_non_unified_signature(jade, mnemonic, fixture):
-    _check_fixture_rejected_for_non_unified_signature(jade, fixture)
+    'fixture', _fixture_parameters(DEFAULT_MNEMONIC_FIXTURES_WITH_MULTISIG_INPUT))
+def test_xbt_rejects_default_mnemonic_psbt_with_multisig_input(jade, mnemonic, fixture):
+    _check_fixture_rejected_for_multisig_input(jade, fixture)
+
+
+@pytest.mark.mnemonic(mnemonics.singlesig)
+def test_xbt_ignores_other_wallet_multisig_input(jade, mnemonic):
+    fixture = _load_fixture(OTHER_WALLET_MULTISIG_FIXTURE)
+    psbt_bytes = _with_other_wallet_input(fixture.psbt_bytes, OTHER_WALLET_MULTISIG_INPUT_INDEX)
+    signed_psbt_bytes = jade.sign_psbt(fixture.network, psbt_bytes)
+    psbt = wally.psbt_from_bytes(psbt_bytes, 0)
+    signed_psbt = wally.psbt_from_bytes(signed_psbt_bytes, 0)
+    assert _signature_counts(signed_psbt) == _signature_counts(psbt)
+    _assert_declared_sighashes(psbt, signed_psbt, signed_inputs=set())
 
 
 @pytest.mark.mnemonic(mnemonics.singlesig)

@@ -186,8 +186,14 @@ static int get_bip85_bip39_entropy_data(const CborValue* params, bip85_data_t* b
         return CBOR_RPC_BAD_PARAMETERS;
     }
 
+#ifdef CONFIG_XBT
+    const bool is_swaps_child_key_request = false;
+#else
+    const bool is_swaps_child_key_request = nwords == 12 && index == 26589;
+#endif
+
     // Special case for cross-chain swaps
-    if (nwords == 12 && index == 26589) {
+    if (is_swaps_child_key_request) {
         // User to confirm
         const char* message[] = { "Continue to pair", "with wallet app." };
 
