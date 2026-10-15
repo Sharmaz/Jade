@@ -265,7 +265,12 @@ static gui_activity_t* create_display_xpub_qr_activity(const uint32_t qr_flags)
 bool handle_xpub_options(uint32_t* qr_flags, bool for_descriptor)
 {
     JADE_ASSERT(qr_flags);
-    if (for_descriptor) {
+#ifdef CONFIG_XBT
+    const bool multisig_allowed = false;
+#else
+    const bool multisig_allowed = !for_descriptor;
+#endif
+    if (!multisig_allowed) {
         *qr_flags &= ~QR_XPUB_MULTISIG; // Disallow multisig
     }
 
@@ -318,7 +323,7 @@ bool handle_xpub_options(uint32_t* qr_flags, bool for_descriptor)
                 }
             }
             update_menu_item(script_item, "Script", xpub_scripttype_desc_from_flags(*qr_flags));
-        } else if (!for_descriptor && ev_id == BTN_XPUB_OPTIONS_WALLETTYPE) {
+        } else if (multisig_allowed && ev_id == BTN_XPUB_OPTIONS_WALLETTYPE) {
             gui_set_current_activity(act_wallettype);
             while (true) {
                 gui_update_text(wallet_textbox, xpub_wallettype_desc_from_flags(*qr_flags));
@@ -383,6 +388,9 @@ bool handle_xpub_options(uint32_t* qr_flags, bool for_descriptor)
 void display_xpub_qr(void)
 {
     uint32_t qr_flags = storage_get_qr_flags();
+#ifdef CONFIG_XBT
+    qr_flags &= ~QR_XPUB_MULTISIG;
+#endif
 
     // Create show xpub activity for those icons
     gui_activity_t* act = create_display_xpub_qr_activity(qr_flags);
@@ -408,6 +416,7 @@ void display_xpub_qr(void)
     }
 }
 
+#ifndef CONFIG_XBT
 // Helper to get user to select and load registered wallet record
 static bool load_registered_wallet(const size_t script_type, char* name_out, const size_t name_out_len,
     multisig_data_t** multisig_data, descriptor_data_t** descriptor)
@@ -467,6 +476,7 @@ static bool load_registered_wallet(const size_t script_type, char* name_out, con
     }
     return true;
 }
+#endif
 
 // Get search root for singlesig address
 static void get_singlesig_search_root(const script_variant_t variant, const uint16_t account_index,
@@ -644,6 +654,7 @@ static bool verify_address(const address_data_t* const addr_data)
     struct ext_key* search_roots = NULL;
     size_t search_roots_len = 0;
 
+#ifndef CONFIG_XBT
     // If it is (or might be) multisig, ask the user to select one, and load details
     if (script_type == WALLY_SCRIPT_TYPE_P2SH || script_type == WALLY_SCRIPT_TYPE_P2WSH) {
         // p2sh-wrapped could be multi- or single- sig.  User to select which.
@@ -673,6 +684,7 @@ static bool verify_address(const address_data_t* const addr_data)
             }
         }
     }
+#endif
 
     // If not multisig or descriptor, must be singlesig
     const bool registered_wallet = multisig_data || descriptor;
@@ -1028,6 +1040,7 @@ static bool handle_qr_bytes(const uint8_t* bytes, const size_t bytes_len)
         return true;
     }
 
+#ifndef CONFIG_XBT
     // Try to handle as multisig file
     if (strncasestr(strbytes, "Name", bytes_len) && strncasestr(strbytes, "Format", bytes_len)
         && strncasestr(strbytes, "Policy", bytes_len) && strncasestr(strbytes, "Derivation", bytes_len)) {
@@ -1043,6 +1056,7 @@ static bool handle_qr_bytes(const uint8_t* bytes, const size_t bytes_len)
         }
         return true;
     }
+#endif
 
     // See if it looks like a new wallet phrase
     // NOTE: these must always be nul-terminated (even when a binary compact seed qr)

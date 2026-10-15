@@ -127,12 +127,14 @@ void sign_attestation_process(void* process_ptr);
 void register_otp_process(void* process_ptr);
 void get_otp_code_process(void* process_ptr);
 void get_xpubs_process(void* process_ptr);
+#ifndef CONFIG_XBT
 void get_registered_multisigs_process(void* process_ptr);
 void get_registered_multisig_process(void* process_ptr);
 void register_multisig_process(void* process_ptr);
 void get_registered_descriptors_process(void* process_ptr);
 void get_registered_descriptor_process(void* process_ptr);
 void register_descriptor_process(void* process_ptr);
+#endif
 void get_receive_address_process(void* process_ptr);
 void get_identity_pubkey_process(void* process_ptr);
 void get_identity_shared_key_process(void* process_ptr);
@@ -141,13 +143,11 @@ void sign_message_process(void* process_ptr);
 void sign_psbt_process(void* process_ptr);
 #ifndef CONFIG_XBT
 void sign_tx_process(void* process_ptr);
-#endif
 void get_master_blinding_key_process(void* process_ptr);
 void get_blinding_key_process(void* process_ptr);
 void get_shared_nonce_process(void* process_ptr);
 void get_commitments_process(void* process_ptr);
 void get_blinding_factor_process(void* process_ptr);
-#ifndef CONFIG_XBT
 void sign_liquid_tx_process(void* process_ptr);
 #endif
 void get_bip85_pubkey_process(void* process_ptr);
@@ -577,6 +577,7 @@ static void dispatch_message(jade_process_t* process)
             task_function = get_otp_code_process;
         } else if (IS_METHOD("get_xpub")) {
             task_function = get_xpubs_process;
+#ifndef CONFIG_XBT
         } else if (IS_METHOD("get_registered_multisigs")) {
             task_function = get_registered_multisigs_process;
         } else if (IS_METHOD("get_registered_multisig")) {
@@ -589,6 +590,7 @@ static void dispatch_message(jade_process_t* process)
             task_function = get_registered_descriptor_process;
         } else if (IS_METHOD("register_descriptor")) {
             task_function = register_descriptor_process;
+#endif
         } else if (IS_METHOD("get_receive_address")) {
             task_function = get_receive_address_process;
         } else if (IS_METHOD("get_identity_pubkey")) {
@@ -606,7 +608,6 @@ static void dispatch_message(jade_process_t* process)
             task_function = sign_tx_process;
         } else if (IS_METHOD("sign_liquid_tx")) {
             task_function = sign_liquid_tx_process;
-#endif
         } else if (IS_METHOD("get_commitments")) {
             task_function = get_commitments_process;
         } else if (IS_METHOD("get_blinding_factor")) {
@@ -617,6 +618,7 @@ static void dispatch_message(jade_process_t* process)
             task_function = get_blinding_key_process;
         } else if (IS_METHOD("get_shared_nonce")) {
             task_function = get_shared_nonce_process;
+#endif
         } else if (IS_METHOD("get_bip85_pubkey")) {
             task_function = get_bip85_pubkey_process;
         } else if (IS_METHOD("sign_bip85_digests")) {
@@ -1046,6 +1048,7 @@ static bool handle_change_pin_qr(void)
 }
 #endif // CONFIG_HAS_CAMERA
 
+#ifndef CONFIG_XBT
 // Helper to delete a wallet registration record after user confirms
 static bool offer_delete_registered_wallet(const char* name, const bool is_multisig)
 {
@@ -1249,6 +1252,7 @@ static void handle_registered_wallets(void)
         JADE_WALLY_VERIFY(wally_free_string(blinding_key));
     }
 }
+#endif
 
 static void set_wallet_erase_pin(void)
 {
@@ -2357,11 +2361,13 @@ static void handle_settings(const bool startup_menu)
             handle_passphrase_prefs();
             break;
 
+#ifndef CONFIG_XBT
         case BTN_SETTINGS_REGISTERED_WALLETS:
             // Potentialy shows so many screens, menu screen will have been freed
             handle_registered_wallets();
             act = make_wallet_settings_activity();
             break;
+#endif
 
         case BTN_SETTINGS_WALLET_ERASE_PIN:
             handle_wallet_erase_pin();

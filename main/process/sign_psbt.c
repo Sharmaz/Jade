@@ -760,6 +760,24 @@ static bool get_unified_input_signature_hash(const struct wally_psbt* psbt, cons
     return has_digest;
 }
 
+#define LONGEST_SINGLESIG_SIGNING_SCRIPT_LENGTH WALLY_SCRIPTPUBKEY_P2TR_LEN
+
+static bool input_signing_script_is_singlesig(const struct wally_psbt* psbt, const size_t input_index)
+{
+    uint8_t signing_script[LONGEST_SINGLESIG_SIGNING_SCRIPT_LENGTH];
+    size_t signing_script_length = 0;
+    size_t signing_script_type = 0;
+    if (wally_psbt_get_input_signing_script(
+            psbt, input_index, signing_script, sizeof(signing_script), &signing_script_length)
+            != WALLY_OK
+        || signing_script_length > sizeof(signing_script)
+        || wally_scriptpubkey_get_type(signing_script, signing_script_length, &signing_script_type) != WALLY_OK) {
+        return false;
+    }
+    return signing_script_type == WALLY_SCRIPT_TYPE_P2PKH || signing_script_type == WALLY_SCRIPT_TYPE_P2WPKH
+        || signing_script_type == WALLY_SCRIPT_TYPE_P2TR;
+}
+
 static bool taproot_signature_is_absent_or_unified(const struct wally_psbt* psbt, const size_t input_index)
 {
     uint8_t signature[EC_SIGNATURE_LEN + 1];
@@ -947,6 +965,14 @@ int sign_psbt(jade_process_t* process, CborValue* params, const network_t networ
 
         // Found our key - we are signing this input
         JADE_LOGD("Key %u belongs to this signer, so we will need to sign input %u", iter.key_index, index);
+#ifdef CONFIG_XBT
+        if (!input_signing_script_is_singlesig(psbt, index)) {
+            JADE_LOGW("Input %u is not a singlesig input", index);
+            *errmsg = "Only singlesig inputs are supported";
+            retval = CBOR_RPC_BAD_PARAMETERS;
+            goto cleanup;
+        }
+#endif
 
         if (for_liquid && in_sums) {
             uint8_t asset_id[32];

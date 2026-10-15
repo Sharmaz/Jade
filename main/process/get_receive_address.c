@@ -57,6 +57,13 @@ void get_receive_address_process(void* process_ptr)
         goto cleanup;
     }
 
+#ifdef CONFIG_XBT
+    if (rpc_has_field_data("multisig_name", &params) || rpc_has_field_data("descriptor_name", &params)) {
+        jade_process_reject_message(process, CBOR_RPC_BAD_PARAMETERS, "Registered wallets are not supported");
+        goto cleanup;
+    }
+#endif
+
     if (rpc_has_field_data("multisig_name", &params)) {
         // Load multisig data record
         multisig_data_t* const multisig_data = JADE_MALLOC(sizeof(multisig_data_t));
