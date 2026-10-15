@@ -243,7 +243,11 @@ bool get_script_variant(const char* variant, const size_t variant_len, script_va
 
     // Default to Green multisig/csv
     if (variant == NULL || variant_len == 0) {
+#ifdef CONFIG_XBT
+        return false;
+#else
         *output = GREEN;
+#endif
         // Singlesig
     } else if (strcmp(VARIANT_P2PKH, variant) == 0) {
         *output = P2PKH;

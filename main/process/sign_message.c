@@ -235,7 +235,11 @@ void sign_message_process(void* process_ptr)
     // If the path and message suggest a gdk login challenge, just sign
     // the message without prompting the user to explicitly confirm.
     // (Otherwise the user has to confirm message or hash and the path.)
+#ifdef CONFIG_XBT
+    const bool auto_sign = false;
+#else
     const bool auto_sign = isGdkLoginChallenge(path, path_len, message, msg_len);
+#endif
     if (auto_sign) {
         JADE_LOGI("Auto-signing GDK login challenge message");
     } else {
