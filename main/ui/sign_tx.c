@@ -28,7 +28,14 @@ static const char BLINDED_OUTPUT[] = "Cannot unblind output";
 // Note shown to highlight outputs to self (script/address verified)
 static const char VERIFIED_WALLET_OUTPUT_MSG[] = "Verified wallet output";
 
-static const char TICKER_BTC[] = "BTC";
+#ifdef CONFIG_XBT
+static const char COIN_TICKER[] = "XBT";
+static const char COIN_FINAL_CONFIRMATION_TITLE[] = "Send XBT";
+static const char REPLAY_PROTECTED_MESSAGE[] = "Replay protected";
+#else
+static const char COIN_TICKER[] = "BTC";
+static const char COIN_FINAL_CONFIRMATION_TITLE[] = "Send Transaction";
+#endif
 
 static const uint32_t POW_10[9] = { 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000 };
 
@@ -466,7 +473,7 @@ bool show_btc_transaction_outputs_activity(
         // Show output info
         const char* msg = (output_info && strlen(output_info[i].message) > 0) ? output_info[i].message : NULL;
         if (!show_input_output_activity(
-                title, is_wallet_output, is_address, address, amount, TICKER_BTC, NULL, NULL, msg)) {
+                title, is_wallet_output, is_address, address, amount, COIN_TICKER, NULL, NULL, msg)) {
             // User pressed 'cancel'
             return false;
         }
@@ -700,10 +707,13 @@ static gui_activity_t* make_final_confirmation_activities(const char* title, con
 
     btn_data_t menubtns[] = {
         { .content = splitfee, .ev_id = BTN_SIGNTX_TICKERAMOUNT },
+#ifdef CONFIG_XBT
+        { .txt = REPLAY_PROTECTED_MESSAGE, .font = GUI_DEFAULT_FONT, .ev_id = GUI_BUTTON_EVENT_NONE },
+#endif
         { .content = warning, .font = GUI_DEFAULT_FONT, .ev_id = warning ? BTN_SIGNTX_WARNING : GUI_BUTTON_EVENT_NONE }
     };
 
-    gui_activity_t* const act = make_menu_activity(title, hdrbtns, 2, menubtns, 2);
+    gui_activity_t* const act = make_menu_activity(title, hdrbtns, 2, menubtns, sizeof(menubtns) / sizeof(btn_data_t));
 
     // NOTE: can only set scrolling *after* gui tree created
     gui_set_text_scroll_selected(amountvalue, true, TFT_BLACK, gui_get_highlight_color());
@@ -763,7 +773,7 @@ bool show_btc_final_confirmation_activity(const network_t network_id, const uint
     const int ret = snprintf(feeamount, sizeof(feeamount), "%.08f", 1.0 * fee / 1e8);
     JADE_ASSERT(ret > 0 && ret < sizeof(feeamount));
 
-    return show_final_confirmation_activity("Send Transaction", feeamount, TICKER_BTC, warning_msg);
+    return show_final_confirmation_activity(COIN_FINAL_CONFIRMATION_TITLE, feeamount, COIN_TICKER, warning_msg);
 }
 
 bool show_elements_final_confirmation_activity(
