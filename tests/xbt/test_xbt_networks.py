@@ -15,7 +15,7 @@ FIRST_ADDRESS_INDEX = 0
 SINGLESIG_P2WPKH_VARIANT = 'wpkh(k)'
 REJECTED_NETWORKS = ['mainnet', 'testnet', 'localtest', 'liquid', 'testnet-liquid',
                      'localtest-liquid']
-REMOVED_SIGNING_METHODS = ['sign_tx', 'sign_liquid_tx']
+REMOVED_SIGNING_METHOD_NAMES = ['sign_tx', 'sign_liquid_tx']
 
 XbtNetwork = namedtuple('XbtNetwork', ['name', 'bip32_version', 'coin_type', 'bech32_prefix'])
 
@@ -74,8 +74,13 @@ def test_xbt_firmware_rejects_other_networks(jade, network_name):
                      'Failed to extract valid network')
 
 
-@pytest.mark.parametrize('method', REMOVED_SIGNING_METHODS)
-def test_xbt_firmware_has_no_legacy_signing_flow(jade, method):
-    request = jade.jade.build_request('removed_method', method, {})
-    reply = jade.jade.make_rpc_call(request)
-    assert reply['error']['code'] == JadeError.UNKNOWN_METHOD
+@pytest.mark.parametrize('network_name', REJECTED_NETWORKS)
+def test_xbt_firmware_rejects_unlock_with_other_networks(jade, network_name):
+    auth_user_parameters = {'network': network_name}
+    check_bad_params(jade.jade, ('other_network', 'auth_user', auth_user_parameters),
+                     'Failed to extract valid network')
+
+
+@pytest.mark.parametrize('method_name', REMOVED_SIGNING_METHOD_NAMES)
+def test_xbt_firmware_has_no_legacy_signing_flow(jade, method_name):
+    check_unknown_method(jade, method_name)
