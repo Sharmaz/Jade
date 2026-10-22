@@ -259,6 +259,24 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
   done'
 ```
 
+## Local PIN server
+
+A wallet with a PIN works together with a blind oracle, the PIN server: the recovery phrase is stored encrypted with a key that the device can only rebuild with the PIN and the answer of the server, and the server enforces the limit of three attempts. The device never connects to the internet: its PIN requests go through the computer it is connected to, which posts them to the server.
+
+XBT builds use a local development server by default: `http://localhost:8096`, with no onion address, and the test key pair at the root of this repository (`server_private_key.key` and `server_public_key.pub`, the same as `pinserver/test_keys`), whose public key is `xbt_pinserver_public_key.pub`. That private key is public, so this server is only for development: an XBT build without debug mode, which is what a release build is, fails to compile until the production server replaces it.
+
+The XBT libjade tests do not need the server: `tests/xbt/test_xbt_pinserver.py` answers the PIN requests in the same process. To unlock a board, run `pinserver/` in Docker with the test private key:
+
+```bash
+docker build --platform linux/amd64 -t local-pinserver pinserver
+docker run --rm -d --name local-pinserver --platform linux/amd64 -p 8096:8096 \
+  -v local-pinserver-pins:/pins \
+  -v "$PWD/server_private_key.key":/server_private_key.key:ro \
+  local-pinserver
+```
+
+The server is ready when `curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8096/` prints `200`. `docker stop local-pinserver` stops it, and the PIN data stays in the `local-pinserver-pins` volume for the next `docker run`. jadepy posts the PIN requests of `auth_user` to the server when it is installed with the `requests` extra: `pip install '.[requests]'`.
+
 ## Continuous integration
 
 - **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master`, and on demand with "Run workflow": format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, the XBT libjade tests with sanitizers, and the XBT regtest tests with Knots and Bitcoin Core. The libjade job with sanitizers also runs the `semaphore` selfcheck, and the "libjade tests with sanitizers" check runs it locally. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, fails if any XBT test was skipped, and runs the `unified_signature` selfcheck. The "XBT libjade tests with sanitizers" check runs the same steps locally. The `xbt-regtest` job runs the regtest tests with Knots and Bitcoin Core, with both tarballs pinned by SHA256 and cached between runs; the "XBT regtest tests with Knots and Bitcoin Core" check runs them locally. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.

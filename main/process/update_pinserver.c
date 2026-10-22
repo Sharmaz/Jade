@@ -18,7 +18,11 @@ bool show_pinserver_details_activity(
 bool show_pinserver_certificate_activity(const char* cert_hash_hex, bool initial_confirmation);
 
 // Default pinserver public key
+#ifdef CONFIG_XBT
+extern const uint8_t server_public_key_start[] asm("_binary_xbt_pinserver_public_key_pub_start");
+#else
 extern const uint8_t server_public_key_start[] asm("_binary_pinserver_public_key_pub_start");
+#endif
 
 static const char URL_PROTOCOL_HTTP[] = { 'h', 't', 't', 'p', ':', '/', '/' };
 static const char URL_PROTOCOL_HTTPS[] = { 'h', 't', 't', 'p', 's', ':', '/', '/' };

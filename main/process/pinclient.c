@@ -18,9 +18,18 @@
 #include "process_utils.h"
 
 // Default pinserver url, onion, and public key
+#ifdef CONFIG_XBT
+#ifndef CONFIG_DEBUG_MODE
+#error "XBT builds without debug mode need the production pinserver: the development pinserver private key is public"
+#endif
+static const char PINSERVER_URL[] = "http://localhost:8096";
+static const char PINSERVER_ONION[] = "";
+extern const uint8_t server_public_key_start[] asm("_binary_xbt_pinserver_public_key_pub_start");
+#else
 static const char PINSERVER_URL[] = "https://j8d.io";
 static const char PINSERVER_ONION[] = "http://mrrxtq6tjpbnbm7vh5jt6mpjctn7ggyfy5wegvbeff3x7jrznqawlmid.onion";
 extern const uint8_t server_public_key_start[] asm("_binary_pinserver_public_key_pub_start");
+#endif
 
 // Pinserver documents to post to
 static const char PINSERVER_DOC_GET_PIN[] = "get_pin";
@@ -101,7 +110,8 @@ static void send_http_request_reply(jade_process_t* process, const char* documen
     // Add second URL (defaults to h/coded onion)
     size_t urlB_len = 0;
     const bool urlBSet = storage_get_pinserver_urlB(urlbuf, sizeof(urlbuf), &urlB_len);
-    if (urlBSet && urlB_len <= 1) {
+    const bool default_onion_is_empty = PINSERVER_ONION[0] == '\0';
+    if ((urlBSet && urlB_len <= 1) || (!urlBSet && default_onion_is_empty)) {
         // Explicitly no second url
         urlB[0] = '\0';
     } else {
