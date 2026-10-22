@@ -26,6 +26,12 @@ if (CONFIG_IDF_TARGET_ESP32S3)
     set(usbdir "usbhmsc")
 endif()
 
+if(CONFIG_XBT)
+    set(pinserver_public_key_file ${PROJECT_DIR}/xbt_pinserver_public_key.pub)
+else()
+    set(pinserver_public_key_file ${PROJECT_DIR}/pinserver_public_key.pub)
+endif()
+
 if(CONFIG_AMALGAMATED_BUILD)
     set(wallydir "${PROJECT_DIR}/components/libwally-core")
     list(APPEND wallydirs "${wallydir}" "${wallydir}/upstream" "${wallydir}/upstream/src" "${wallydir}/upstream/src/ccan")
@@ -53,7 +59,7 @@ idf_component_register(SRC_DIRS "."
                           "${wallydirs}"
                           "${secpdir}"
         PRIV_REQUIRES assets libwally-core libsodium esp32-rotary-encoder esp32-quirc bootloader_support app_update nvs_flash bt autogenlang cbor esp_netif esp32_bsdiff esp32_deflate esp32_bc-ur driver mbedtls http_parser esp_hw_support efuse esp_eth esp_http_server esp_lcd usb vfs app_trace spi_flash google-otpauth-migrate ${extra_priv_requires}
-        EMBED_FILES ${PROJECT_DIR}/pinserver_public_key.pub ${logo_files} ${qemu_display_file})
+        EMBED_FILES ${pinserver_public_key_file} ${logo_files} ${qemu_display_file})
 
 if(CONFIG_ETH_USE_OPENETH)
     if (CONFIG_HAS_CAMERA)
