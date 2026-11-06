@@ -37,13 +37,13 @@ void build_version_info_reply(const void* ctx, CborEncoder* container)
     const uint8_t num_version_fields = 15;
 #endif
 #ifdef CONFIG_XBT
-    const uint8_t num_xbt_fields = 1;
+    const uint8_t xbt_field_count = 2;
 #else
-    const uint8_t num_xbt_fields = 0;
+    const uint8_t xbt_field_count = 0;
 #endif
 
     CborEncoder map_encoder;
-    CborError cberr = cbor_encoder_create_map(container, &map_encoder, num_version_fields + num_xbt_fields);
+    CborError cberr = cbor_encoder_create_map(container, &map_encoder, num_version_fields + xbt_field_count);
     JADE_ASSERT(cberr == CborNoError);
 
     add_string_to_map(&map_encoder, "JADE_VERSION", running_app_info.version);
@@ -122,6 +122,7 @@ void build_version_info_reply(const void* ctx, CborEncoder* container)
     add_string_to_map(&map_encoder, "JADE_NETWORKS", networks);
 #ifdef CONFIG_XBT
     add_string_to_map(&map_encoder, "JADE_CHAIN", "XBT");
+    add_boolean_to_map(&map_encoder, "NEFRITA_HAS_TEMPORARY_WALLET", keychain_has_temporary());
 #endif
 
     // Deprecated (as of 0.1.25) - to be removed later

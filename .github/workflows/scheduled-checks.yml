@@ -86,7 +86,7 @@ jobs:
             grep "binary size" "$RUNNER_TEMP/build.log"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  libjade-selfcheck:
+  libjade-selfchecks:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     container:
@@ -97,7 +97,7 @@ jobs:
     env:
       ASAN_OPTIONS: symbolize=1,detect_leaks=0
       UBSAN_OPTIONS: print_stacktrace=1
-      ASAN_SO: /usr/lib/gcc/x86_64-linux-gnu/13/libasan.so
+      ASAN_LIBRARY: /usr/lib/gcc/x86_64-linux-gnu/13/libasan.so
     steps:
       - uses: actions/checkout@v7
         with:
@@ -125,7 +125,7 @@ jobs:
             selfcheck_name="$(basename "${selfcheck_source%.*}")"
             echo "::group::selfcheck $selfcheck_name"
             ./libjade/make_libjade.sh Sanitize -DSELFCHECK="$selfcheck_name"
-            LD_PRELOAD="$ASAN_SO" python ./jade_cli.py --device libjade selfcheck
+            LD_PRELOAD="$ASAN_LIBRARY" python ./jade_cli.py --device libjade selfcheck
             echo "::endgroup::"
           done
 
