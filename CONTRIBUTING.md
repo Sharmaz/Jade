@@ -78,11 +78,11 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
   pip install -q -r pinserver/requirements.txt && pip install -q . && pip install -q pytest &&
   ./libjade/make_libjade.sh Sanitize -DSELFCHECK=semaphore &&
   export LD_LIBRARY_PATH=$PWD/build_linux/libjade ASAN_OPTIONS=symbolize=1,detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 &&
-  export ASAN_SO=$(gcc -print-file-name=libasan.so) &&
-  LD_PRELOAD=$ASAN_SO python ./jade_cli.py --device libjade selfcheck &&
+  export ASAN_LIBRARY=$(gcc -print-file-name=libasan.so) &&
+  LD_PRELOAD=$ASAN_LIBRARY python ./jade_cli.py --device libjade selfcheck &&
   ./libjade/make_libjade.sh Sanitize -DSELFCHECK= &&
-  LD_PRELOAD=$ASAN_SO python ./test_jade.py --log CRITICAL --libjade &&
-  LD_PRELOAD=$ASAN_SO pytest -v --libjade tests'
+  LD_PRELOAD=$ASAN_LIBRARY python ./test_jade.py --log CRITICAL --libjade &&
+  LD_PRELOAD=$ASAN_LIBRARY pytest -v --libjade tests'
 ```
 
 The first build runs the `semaphore` selfcheck (`libjade/selfcheck/semaphore.c`), which interrupts the semaphore waits of the libjade FreeRTOS emulation with signals and checks that they retry instead of aborting. CMake keeps the last `SELFCHECK` value in `build_linux`, so the second build passes `-DSELFCHECK=` to restore the default selfcheck that `test_jade.py` runs.
@@ -100,15 +100,21 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
   export LD_LIBRARY_PATH=$PWD/build_linux/libjade &&
   ./libjade/make_libjade.sh Debug --xbt -DSELFCHECK=unified_signature &&
   python ./jade_cli.py --device libjade selfcheck &&
+  ./libjade/make_libjade.sh Debug --xbt -DSELFCHECK=temporary_wallet &&
+  python ./jade_cli.py --device libjade selfcheck &&
   ./libjade/make_libjade.sh Debug --xbt -DSELFCHECK= &&
   pytest -v --libjade tests/xbt tests/rpc/test_unified_sighash.py tests/rpc/test_unified_sighash_differential.py'
 ```
 
-The first build runs the `unified_signature` selfcheck (`libjade/selfcheck/unified_signature.c`), which checks the signature verification that the XBT firmware runs after every signature. CMake keeps the last `SELFCHECK` value in `build_linux`, so the second build passes `-DSELFCHECK=` to restore the default selfcheck that `test_jade.py` runs.
+The first build runs the `unified_signature` selfcheck (`libjade/selfcheck/unified_signature.c`), which checks the signature verification that the XBT firmware runs after every signature.
+
+The second build runs the `temporary_wallet` selfcheck (`libjade/selfcheck/temporary_wallet.c`). It checks that `NEFRITA_HAS_TEMPORARY_WALLET` in `get_version_info` reports whether the wallet is temporary, for a temporary wallet and for one that is not, in three cases each: without a connection, with the connection of the selfcheck, and in use by QR mode. The tests load their wallet with `debug_set_mnemonic`, which always associates it with their connection, so they can only check the second case. Built without `--xbt`, as `Scheduled checks` builds every selfcheck, it checks in the same six cases that the reply has no `NEFRITA_HAS_TEMPORARY_WALLET`.
+
+CMake keeps the last `SELFCHECK` value in `build_linux`, so the third build passes `-DSELFCHECK=` to restore the default selfcheck that `test_jade.py` runs.
 
 ### XBT libjade tests with sanitizers
 
-The same steps as the `libjade-xbt` job of `PR checks`: the check that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, then the `unified_signature` selfcheck and the XBT tests, with libjade built with sanitizers.
+The same steps as the `libjade-xbt` job of `PR checks`: the check that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, then the `unified_signature` and `temporary_wallet` selfchecks and the XBT tests, with libjade built with sanitizers.
 
 ```bash
 JADE_BUILDER=blockstream/jade_builder@sha256:cbf0aabee7513dc8cad8f1d69a5e00f5b73bcd0965a44254627c0de4bfc8c4f2
@@ -130,6 +136,8 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
   export LD_LIBRARY_PATH=$PWD/build_linux/libjade ASAN_OPTIONS=symbolize=1,detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 &&
   export ASAN_LIBRARY=$(gcc -print-file-name=libasan.so) &&
   ./libjade/make_libjade.sh Sanitize --xbt -DSELFCHECK=unified_signature &&
+  LD_PRELOAD=$ASAN_LIBRARY python ./jade_cli.py --device libjade selfcheck &&
+  ./libjade/make_libjade.sh Sanitize --xbt -DSELFCHECK=temporary_wallet &&
   LD_PRELOAD=$ASAN_LIBRARY python ./jade_cli.py --device libjade selfcheck &&
   ./libjade/make_libjade.sh Sanitize --xbt -DSELFCHECK= &&
   LD_PRELOAD=$ASAN_LIBRARY pytest -v --libjade tests/xbt tests/rpc/test_unified_sighash.py tests/rpc/test_unified_sighash_differential.py'
@@ -225,8 +233,6 @@ The replay test runs against a pinned Bitcoin Core release. Repeat these steps f
 3. Update `BITCOIN_CORE_VERSION`, `BITCOIN_CORE_RELEASE_URL` and `BITCOIN_CORE_TARBALL_SHA256` in the `xbt-regtest` job, and the version and hash in the command block of the "XBT regtest tests with Knots and Bitcoin Core" section, with the `SHA256SUMS` line of the `x86_64-linux-gnu.tar.gz` tarball.
 4. Run that block. If the new release words its script verification failures differently, update the expected reject reasons in `tests/xbt_regtest/test_xbt_replay.py`.
 
-Before running the plain libjade tests again after any XBT check, rebuild libjade without `--xbt`: the rest of the suite uses the Bitcoin and Liquid networks.
-
 ### Firmware builds
 
 Run them last: the libjade checks run `tools/switch_to.sh`, which deletes `build/`. After this check, `build/` holds the images of the last board built.
@@ -240,8 +246,11 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
     rm -rf sdkconfig build &&
     cp configs/sdkconfig_$board.defaults sdkconfig.defaults &&
     idf.py set-target $target && idf.py all || exit 1
-  done'
+  done &&
+  echo "Firmware builds passed"'
 ```
+
+The check passes when the output ends with `Firmware builds passed`.
 
 ### XBT firmware builds
 
@@ -256,8 +265,11 @@ docker run --rm --platform linux/amd64 -v "$PWD":/host/jade -w /host/jade "$JADE
     rm -rf sdkconfig build &&
     cat configs/sdkconfig_$board.defaults configs/sdkconfig_xbt.defaults > sdkconfig.defaults &&
     idf.py set-target $target && idf.py all && grep -qx "CONFIG_XBT=y" sdkconfig || exit 1
-  done'
+  done &&
+  echo "XBT firmware builds passed"'
 ```
+
+The check passes when the output ends with `XBT firmware builds passed`.
 
 ## Local PIN server
 
@@ -279,7 +291,7 @@ The server is ready when `curl -s -o /dev/null -w "%{http_code}\n" http://localh
 
 ## Continuous integration
 
-- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master`, and on demand with "Run workflow": format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, the XBT libjade tests with sanitizers, and the XBT regtest tests with Knots and Bitcoin Core. The libjade job with sanitizers also runs the `semaphore` selfcheck, and the "libjade tests with sanitizers" check runs it locally. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, fails if any XBT test was skipped, and runs the `unified_signature` selfcheck. The "XBT libjade tests with sanitizers" check runs the same steps locally. The `xbt-regtest` job runs the regtest tests with Knots and Bitcoin Core, with both tarballs pinned by SHA256 and cached between runs; the "XBT regtest tests with Knots and Bitcoin Core" check runs them locally. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
+- **`PR checks`** (`.github/workflows/pr-checks.yml`) runs on every pull request to `master`, and on demand with "Run workflow": format, firmware builds for three boards plus the XBT firmware of two of them, libjade tests, libjade tests with sanitizers, the XBT libjade tests with sanitizers, and the XBT regtest tests with Knots and Bitcoin Core. The libjade job with sanitizers also runs the `semaphore` selfcheck, and the "libjade tests with sanitizers" check runs it locally. The XBT job also checks that the Bitcoin signature hash functions banned by `main/xbt_sighash_ban.h` do not compile in an XBT build, fails if any XBT test was skipped, and runs the `unified_signature` and `temporary_wallet` selfchecks. The "XBT libjade tests with sanitizers" check runs the same steps locally. The `xbt-regtest` job runs the regtest tests with Knots and Bitcoin Core, with both tarballs pinned by SHA256 and cached between runs; the "XBT regtest tests with Knots and Bitcoin Core" check runs them locally. The firmware images of each board can be downloaded from the artifacts of the run, together with `flash_args`, the flash offsets that `esptool write_flash @flash_args` reads.
 - `PR checks` does not run again after a merge. The `master` ruleset requires a branch to be up to date with `master` before it can be merged, so the run of the pull request already tested exactly what lands on `master`. When `master` moves while a pull request is open, update the branch ("Update branch") and wait for the checks again. To get the firmware images of `master`, run `PR checks` on `master` with "Run workflow".
 - **`Scheduled checks`** (`.github/workflows/scheduled-checks.yml`) runs every Monday at 06:00 UTC and on demand: firmware builds for every DIY board, libjade selfchecks, CodeQL analysis and, on demand, a coverage report.
 - The image digest (`jade_builder@sha256:…`) appears in both workflows and in every command block of this guide. When it changes, update all of them together.
